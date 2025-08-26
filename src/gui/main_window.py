@@ -65,31 +65,51 @@ class MainWindow(QMainWindow):
         range_group = QWidget()
         range_layout = QVBoxLayout(range_group)
         
-        # Range sliders
-        range_slider_layout = QHBoxLayout()
-        range_slider_layout.addWidget(QLabel("Frame Range:"))
+        # Annotation range sliders
+        annotation_range_layout = QHBoxLayout()
+        annotation_range_layout.addWidget(QLabel("Annotation Range:"))
         
-        # Start frame slider
-        start_layout = QVBoxLayout()
-        start_layout.addWidget(QLabel("Start:"))
+        # Start annotation slider
+        start_annotation_layout = QVBoxLayout()
+        start_annotation_layout.addWidget(QLabel("Start:"))
+        
+        start_slider_layout = QHBoxLayout()
         self.start_slider = QSlider(Qt.Orientation.Horizontal)
         self.start_slider.setEnabled(False)
-        start_layout.addWidget(self.start_slider)
+        start_slider_layout.addWidget(self.start_slider)
         
-        # End frame slider
-        end_layout = QVBoxLayout()
-        end_layout.addWidget(QLabel("End:"))
+        self.start_input = QLineEdit()
+        self.start_input.setPlaceholderText("MM:SS")
+        self.start_input.setFixedWidth(60)
+        self.start_input.setEnabled(False)
+        start_slider_layout.addWidget(self.start_input)
+        
+        start_annotation_layout.addLayout(start_slider_layout)
+        
+        # End annotation slider
+        end_annotation_layout = QVBoxLayout()
+        end_annotation_layout.addWidget(QLabel("End:"))
+        
+        end_slider_layout = QHBoxLayout()
         self.end_slider = QSlider(Qt.Orientation.Horizontal)
         self.end_slider.setEnabled(False)
-        end_layout.addWidget(self.end_slider)
+        end_slider_layout.addWidget(self.end_slider)
         
-        range_slider_layout.addLayout(start_layout)
-        range_slider_layout.addLayout(end_layout)
+        self.end_input = QLineEdit()
+        self.end_input.setPlaceholderText("MM:SS")
+        self.end_input.setFixedWidth(60)
+        self.end_input.setEnabled(False)
+        end_slider_layout.addWidget(self.end_input)
         
-        self.range_label = QLabel("0 - 0")
-        range_slider_layout.addWidget(self.range_label)
+        end_annotation_layout.addLayout(end_slider_layout)
         
-        range_layout.addLayout(range_slider_layout)
+        annotation_range_layout.addLayout(start_annotation_layout)
+        annotation_range_layout.addLayout(end_annotation_layout)
+        
+        self.range_label = QLabel("00:00 - 00:00")
+        annotation_range_layout.addWidget(self.range_label)
+        
+        range_layout.addLayout(annotation_range_layout)
         
         # Annotation input
         annotation_layout = QHBoxLayout()
@@ -104,6 +124,59 @@ class MainWindow(QMainWindow):
         annotation_layout.addWidget(self.apply_button)
         
         range_layout.addLayout(annotation_layout)
+        
+        # CSV Export range controls
+        csv_range_group = QWidget()
+        csv_range_layout = QVBoxLayout(csv_range_group)
+        
+        csv_range_layout.addWidget(QLabel("CSV Export Range:"))
+        
+        # CSV Export range sliders
+        csv_range_slider_layout = QHBoxLayout()
+        
+        # Start CSV export slider
+        start_csv_layout = QVBoxLayout()
+        start_csv_layout.addWidget(QLabel("Export Start:"))
+        
+        csv_start_slider_layout = QHBoxLayout()
+        self.csv_start_slider = QSlider(Qt.Orientation.Horizontal)
+        self.csv_start_slider.setEnabled(False)
+        csv_start_slider_layout.addWidget(self.csv_start_slider)
+        
+        self.csv_start_input = QLineEdit()
+        self.csv_start_input.setPlaceholderText("MM:SS")
+        self.csv_start_input.setFixedWidth(60)
+        self.csv_start_input.setEnabled(False)
+        csv_start_slider_layout.addWidget(self.csv_start_input)
+        
+        start_csv_layout.addLayout(csv_start_slider_layout)
+        
+        # End CSV export slider
+        end_csv_layout = QVBoxLayout()
+        end_csv_layout.addWidget(QLabel("Export End:"))
+        
+        csv_end_slider_layout = QHBoxLayout()
+        self.csv_end_slider = QSlider(Qt.Orientation.Horizontal)
+        self.csv_end_slider.setEnabled(False)
+        csv_end_slider_layout.addWidget(self.csv_end_slider)
+        
+        self.csv_end_input = QLineEdit()
+        self.csv_end_input.setPlaceholderText("MM:SS")
+        self.csv_end_input.setFixedWidth(60)
+        self.csv_end_input.setEnabled(False)
+        csv_end_slider_layout.addWidget(self.csv_end_input)
+        
+        end_csv_layout.addLayout(csv_end_slider_layout)
+        
+        csv_range_slider_layout.addLayout(start_csv_layout)
+        csv_range_slider_layout.addLayout(end_csv_layout)
+        
+        self.csv_range_label = QLabel("00:00 - 00:00")
+        csv_range_slider_layout.addWidget(self.csv_range_label)
+        
+        csv_range_layout.addLayout(csv_range_slider_layout)
+        
+        right_layout.addWidget(csv_range_group)
         
         right_layout.addWidget(range_group)
         
@@ -178,6 +251,16 @@ class MainWindow(QMainWindow):
         self.start_slider.valueChanged.connect(self.on_range_changed)
         self.end_slider.valueChanged.connect(self.on_range_changed)
         
+        # CSV export range slider connections
+        self.csv_start_slider.valueChanged.connect(self.on_csv_range_changed)
+        self.csv_end_slider.valueChanged.connect(self.on_csv_range_changed)
+        
+        # Input field connections
+        self.start_input.returnPressed.connect(self.on_start_input_changed)
+        self.end_input.returnPressed.connect(self.on_end_input_changed)
+        self.csv_start_input.returnPressed.connect(self.on_csv_start_input_changed)
+        self.csv_end_input.returnPressed.connect(self.on_csv_end_input_changed)
+        
         # Apply button connection
         self.apply_button.clicked.connect(self.apply_annotation_to_range)
         
@@ -222,8 +305,9 @@ class MainWindow(QMainWindow):
             # Initialize annotation table
             self.initialize_annotation_table()
             
-            # Initialize range slider
+            # Initialize range sliders
             self.initialize_range_slider()
+            self.initialize_csv_range_slider()
             
             # Update status bar
             self.status_bar.update_video_info(self.video_data)
@@ -274,14 +358,27 @@ class MainWindow(QMainWindow):
         self.start_slider.setMaximum(total_seconds)
         self.start_slider.setValue(0)
         
+        # Initialize start input field
+        self.start_input.setEnabled(True)
+        self.start_input.setText("00:00")
+        
         # Initialize end slider (in seconds)
         self.end_slider.setEnabled(True)
         self.end_slider.setMinimum(0)
         self.end_slider.setMaximum(total_seconds)
         self.end_slider.setValue(total_seconds)
         
+        # Initialize end input field
+        self.end_input.setEnabled(True)
+        self.end_input.setText(self.format_time(total_seconds))
+        
         # Update range label with time format
         self.update_range_label()
+        
+        # Update input fields
+        self.start_input.setText("00:00")
+        self.end_input.setText(self.format_time(total_seconds))
+        
         self.apply_button.setEnabled(True)
     
     def on_frame_changed(self, frame_number: int):
@@ -309,6 +406,143 @@ class MainWindow(QMainWindow):
         
         # Update range label with time format
         self.update_range_label()
+        
+        # Update input fields
+        self.start_input.setText(self.format_time(start_seconds))
+        self.end_input.setText(self.format_time(end_seconds))
+    
+    def initialize_csv_range_slider(self):
+        """Initialize the CSV export range sliders with time-based values"""
+        if not self.video_data:
+            return
+        
+        # Calculate total duration in seconds
+        total_seconds = int(self.video_data.duration)
+        
+        # Initialize CSV start slider (in seconds)
+        self.csv_start_slider.setEnabled(True)
+        self.csv_start_slider.setMinimum(0)
+        self.csv_start_slider.setMaximum(total_seconds)
+        self.csv_start_slider.setValue(0)
+        
+        # Initialize CSV start input field
+        self.csv_start_input.setEnabled(True)
+        self.csv_start_input.setText("00:00")
+        
+        # Initialize CSV end slider (in seconds)
+        self.csv_end_slider.setEnabled(True)
+        self.csv_end_slider.setMinimum(0)
+        self.csv_end_slider.setMaximum(total_seconds)
+        self.csv_end_slider.setValue(total_seconds)
+        
+        # Initialize CSV end input field
+        self.csv_end_input.setEnabled(True)
+        self.csv_end_input.setText(self.format_time(total_seconds))
+        
+        # Update CSV range label with time format
+        self.update_csv_range_label()
+    
+    def on_csv_range_changed(self, value: int):
+        """Handle CSV export range slider value change"""
+        if not self.video_data:
+            return
+        
+        # Ensure start time is not greater than end time
+        start_seconds = self.csv_start_slider.value()
+        end_seconds = self.csv_end_slider.value()
+        
+        if start_seconds > end_seconds:
+            # If start time is greater than end time, adjust end time
+            if self.sender() == self.csv_start_slider:
+                self.csv_end_slider.setValue(start_seconds)
+                end_seconds = start_seconds
+            else:
+                self.csv_start_slider.setValue(end_seconds)
+                start_seconds = end_seconds
+        
+        # Update CSV range label with time format
+        self.update_csv_range_label()
+        
+        # Update CSV input fields
+        self.csv_start_input.setText(self.format_time(start_seconds))
+        self.csv_end_input.setText(self.format_time(end_seconds))
+    
+    def update_csv_range_label(self):
+        """Update the CSV range label with formatted time"""
+        if not self.video_data:
+            return
+        
+        start_seconds = self.csv_start_slider.value()
+        end_seconds = self.csv_end_slider.value()
+        
+        start_time_str = self.format_time(start_seconds)
+        end_time_str = self.format_time(end_seconds)
+        
+        self.csv_range_label.setText(f"{start_time_str} - {end_time_str}")
+    
+    def on_start_input_changed(self):
+        """Handle start input field value change"""
+        if not self.video_data:
+            return
+        
+        value = self.parse_time(self.start_input.text())
+        if value < 0:
+            value = 0
+        elif value > int(self.video_data.duration):
+            value = int(self.video_data.duration)
+        
+        self.start_slider.setValue(value)
+        
+        # Update input field with formatted time
+        self.start_input.setText(self.format_time(value))
+    
+    def on_end_input_changed(self):
+        """Handle end input field value change"""
+        if not self.video_data:
+            return
+        
+        value = self.parse_time(self.end_input.text())
+        if value < 0:
+            value = 0
+        elif value > int(self.video_data.duration):
+            value = int(self.video_data.duration)
+        
+        self.end_slider.setValue(value)
+        
+        # Update input field with formatted time
+        self.end_input.setText(self.format_time(value))
+    
+    def on_csv_start_input_changed(self):
+        """Handle CSV start input field value change"""
+        if not self.video_data:
+            return
+        
+        value = self.parse_time(self.csv_start_input.text())
+        if value < 0:
+            value = 0
+        elif value > int(self.video_data.duration):
+            value = int(self.video_data.duration)
+        
+        self.csv_start_slider.setValue(value)
+        
+        # Update input field with formatted time
+        self.csv_start_input.setText(self.format_time(value))
+    
+    def on_csv_end_input_changed(self):
+        """Handle CSV end input field value change"""
+        if not self.video_data:
+            return
+        
+        value = self.parse_time(self.csv_end_input.text())
+        if value < 0:
+            value = 0
+        elif value > int(self.video_data.duration):
+            value = int(self.video_data.duration)
+        
+        self.csv_end_slider.setValue(value)
+        
+        # Update input field with formatted time
+        self.csv_end_input.setText(self.format_time(value))
     
     def apply_annotation_to_range(self):
         """Apply annotation to the selected frame range"""
@@ -395,7 +629,7 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "Error", f"Failed to save annotations: {str(e)}")
     
     def export_csv(self):
-        """Export annotations to CSV file"""
+        """Export annotations to CSV file within the selected time range"""
         if not self.video_data:
             QMessageBox.warning(self, "Warning", "No video loaded.")
             return
@@ -409,21 +643,35 @@ class MainWindow(QMainWindow):
         
         if file_path:
             try:
-                # Prepare data for export
+                # Get the CSV export range from the sliders (in seconds)
+                start_seconds = self.csv_start_slider.value()
+                end_seconds = self.csv_end_slider.value()
+                
+                # Convert seconds to frame numbers
+                start_frame = self.seconds_to_frame(start_seconds)
+                end_frame = self.seconds_to_frame(end_seconds)
+                
+                # Prepare data for export (only within the selected range)
                 data = []
-                for row in range(self.annotation_table.rowCount()):
-                    frame_number = row + 1
-                    annotation_item = self.annotation_table.item(row, 1)
-                    annotation_value = annotation_item.text() if annotation_item else "0"
-                    
-                    data.append({
-                        "Frame#": frame_number,
-                        "Annotation": annotation_value
-                    })
+                for frame_num in range(start_frame, end_frame + 1):
+                    # Get annotation from table
+                    table_row = frame_num - 1
+                    if table_row < self.annotation_table.rowCount():
+                        annotation_item = self.annotation_table.item(table_row, 1)
+                        annotation_value = annotation_item.text() if annotation_item else "0"
+                        
+                        data.append({
+                            "Frame#": frame_num,
+                            "Annotation": annotation_value
+                        })
                 
                 # Export to CSV
                 self.csv_exporter.export_annotations_to_csv(data, file_path)
-                QMessageBox.information(self, "Success", "CSV exported successfully.")
+                
+                # Show success message with range info
+                start_time_str = self.format_time(start_seconds)
+                end_time_str = self.format_time(end_seconds)
+                QMessageBox.information(self, "Success", f"CSV exported successfully for time range {start_time_str} - {end_time_str}")
                 
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to export CSV: {str(e)}")
@@ -435,7 +683,11 @@ class MainWindow(QMainWindow):
             "About Video Annotation Tool",
             "Video Annotation Tool v1.0.0\n\n"
             "A simple tool for annotating video frames with text annotations.\n"
-            "Watch the video and use the range slider to apply annotations to frame ranges."
+            "Features:\n"
+            "• Use annotation range sliders or input fields to set time ranges\n"
+            "• Use CSV export range sliders or input fields to export specific time ranges\n"
+            "• Export annotations to CSV files with frame-level precision\n"
+            "• Direct integer input for precise time control"
         )
     
     def load_window_settings(self):
@@ -473,6 +725,23 @@ class MainWindow(QMainWindow):
         minutes = seconds // 60
         remaining_seconds = seconds % 60
         return f"{minutes:02d}:{remaining_seconds:02d}"
+    
+    def parse_time(self, time_str: str) -> int:
+        """Parse MM:SS format to seconds"""
+        try:
+            if ':' in time_str:
+                parts = time_str.split(':')
+                if len(parts) == 2:
+                    minutes = int(parts[0])
+                    seconds = int(parts[1])
+                    if 0 <= minutes <= 59 and 0 <= seconds <= 59:
+                        return minutes * 60 + seconds
+            else:
+                # Fallback: treat as seconds
+                return int(time_str)
+        except ValueError:
+            pass
+        return 0
     
     def update_range_label(self):
         """Update the range label with formatted time"""
