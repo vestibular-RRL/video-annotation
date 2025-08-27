@@ -2,9 +2,11 @@
 Status Bar Widget
 """
 
-from PyQt6.QtWidgets import QStatusBar, QLabel, QProgressBar, QWidget, QHBoxLayout
-from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QStatusBar, QLabel, QProgressBar, QWidget, QHBoxLayout, QPushButton
+from PyQt6.QtCore import Qt, QUrl
+from PyQt6.QtGui import QDesktopServices
 from src.models.video_data import VideoData
+from config.constants import REPORT_PROBLEM_URL
 
 
 class StatusBar(QStatusBar):
@@ -45,6 +47,19 @@ class StatusBar(QStatusBar):
         self.progress_bar.setVisible(False)
         self.progress_bar.setMaximumWidth(200)
         self.addPermanentWidget(self.progress_bar)
+        
+        # Add tracking info label
+        self.tracking_info_label = QLabel("No tracking data")
+        self.addPermanentWidget(self.tracking_info_label)
+        
+        # Separator
+        self.addPermanentWidget(QLabel("|"))
+        
+        # Report Problem button
+        self.report_button = QPushButton("Report Problem")
+        self.report_button.setMaximumWidth(120)
+        self.report_button.clicked.connect(self.report_problem)
+        self.addPermanentWidget(self.report_button)
     
     def update_video_info(self, video_data: VideoData):
         """Update video information display"""
@@ -73,6 +88,18 @@ class StatusBar(QStatusBar):
     def update_annotation_count(self, count: int):
         """Update annotation count display"""
         self.annotation_count_label.setText(f"Annotations: {count}")
+    
+    def update_tracking_info(self, stats: dict):
+        """Update tracking information display"""
+        if not stats:
+            self.tracking_info_label.setText("No tracking data")
+            return
+        
+        info_text = (f"Tracking: {stats.get('total_frames', 0)} frames, "
+                    f"{stats.get('total_detections', 0)} detections, "
+                    f"{stats.get('total_ellipses', 0)} ellipses, "
+                    f"{stats.get('unique_objects', 0)} objects")
+        self.tracking_info_label.setText(info_text)
     
     def show_progress(self, visible: bool = True):
         """Show or hide progress bar"""
@@ -104,3 +131,24 @@ class StatusBar(QStatusBar):
         self.update_video_info(video_data)
         self.update_frame_info(current_frame, video_data)
         self.update_annotation_count(annotation_count)
+
+    def report_problem(self):
+        """Open the report problem link in the default browser"""
+        try:
+            # You can replace this URL with your actual contact/issue reporting link
+            report_url = REPORT_PROBLEM_URL
+            
+            # Alternative URLs you might want to use:
+            # report_url = "mailto:your-email@example.com?subject=Video Annotation Tool - Problem Report"
+            # report_url = "https://forms.gle/your-google-form-id"
+            # report_url = "https://your-website.com/contact"
+            
+            # Open the URL in the default browser
+            QDesktopServices.openUrl(QUrl(report_url))
+            
+        except Exception as e:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Error", 
+                              f"Could not open the report problem link.\n"
+                              f"Error: {str(e)}\n\n"
+                              f"Please manually visit: {report_url}")

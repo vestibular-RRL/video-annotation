@@ -8,8 +8,8 @@ from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QSplitter, QMenuBar, QMenu, QFileDialog, QMessageBox,
                              QTableWidget, QTableWidgetItem, QHeaderView, QSlider,
                              QLabel, QLineEdit, QPushButton)
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QAction, QKeySequence
+from PyQt6.QtCore import Qt, pyqtSignal, QUrl
+from PyQt6.QtGui import QAction, QKeySequence, QDesktopServices
 
 from src.gui.video_player import VideoPlayer
 from src.gui.widgets.status_bar import StatusBar
@@ -17,8 +17,9 @@ from src.core.video_processor import VideoProcessor
 from src.core.annotation_manager import AnnotationManager
 from src.core.csv_exporter import CSVExporter
 from src.models.video_data import VideoData
-from config.constants import SUPPORTED_VIDEO_FORMATS, WINDOW_TITLE
+from config.constants import SUPPORTED_VIDEO_FORMATS, WINDOW_TITLE, REPORT_PROBLEM_URL
 from config.settings import Settings
+from src.core.object_tracker import ObjectTracker
 
 
 class MainWindow(QMainWindow):
@@ -31,6 +32,9 @@ class MainWindow(QMainWindow):
         self.video_data = None
         self.annotation_manager = AnnotationManager()
         self.csv_exporter = CSVExporter()
+        
+        # Add tracking-related attributes
+        self.tracking_results = {}
         
         self.init_ui()
         self.setup_menus()
@@ -237,6 +241,14 @@ class MainWindow(QMainWindow):
         # Help menu
         help_menu = menubar.addMenu("&Help")
         
+        # Report Problem action
+        report_action = QAction("&Report Problem...", self)
+        report_action.setShortcut("Ctrl+R")
+        report_action.triggered.connect(self.report_problem)
+        help_menu.addAction(report_action)
+        
+        help_menu.addSeparator()
+        
         # About action
         about_action = QAction("&About", self)
         about_action.triggered.connect(self.show_about)
@@ -266,6 +278,9 @@ class MainWindow(QMainWindow):
         
         # Table connections
         self.annotation_table.itemChanged.connect(self.on_annotation_changed)
+        
+        # Connect tracking completion signal
+        self.video_player.tracking_completed.connect(self.on_tracking_completed)
     
     def open_video(self):
         """Open a video file"""
@@ -770,3 +785,62 @@ class MainWindow(QMainWindow):
             self.video_processor.close()
         
         event.accept()
+
+    def on_tracking_completed(self, results):
+        """Handle tracking completion"""
+        self.tracking_results = results
+        
+        # Update status bar
+        if self.status_bar:
+            stats = self.get_tracking_statistics()
+            self.status_bar.update_tracking_info(stats)
+        
+        # Show completion message
+        QMessageBox.information(self, "Tracking Complete", 
+                              f"Split tracking completed!\n"
+                              f"Processed {len(results)} frames.")
+    
+    def get_tracking_statistics(self) -> dict:
+        """Get tracking statistics"""
+        if not self.tracking_results:
+            return {}
+        
+        total_frames = len(self.tracking_results)
+        total_detections = sum(len(result.detections) for result in self.tracking_results.values())
+        total_areas = sum(len(result.bounding_box_areas) for result in self.tracking_results.values())
+        unique_tracking_ids = set()
+        
+        for result in self.tracking_results.values():
+            for detection in result.detections:
+                if detection.get('tracking_id') is not None:
+                    unique_tracking_ids.add(detection['tracking_id'])
+        
+        return {
+            'total_frames': total_frames,
+            'total_detections': total_detections,
+            'total_areas': total_areas,
+            'unique_objects': len(unique_tracking_ids),
+            'avg_detections_per_frame': total_detections / total_frames if total_frames > 0 else 0,
+            'avg_areas_per_frame': total_areas / total_frames if total_frames > 0 else 0
+        }
+    
+    def report_problem(self):
+        """Open the report problem link in the default browser"""
+        try:
+            # You can replace this URL with your actual contact/issue reporting link
+            # Examples: GitHub Issues, email, contact form, etc.
+            report_url = REPORT_PROBLEM_URL
+            
+            # Alternative URLs you might want to use:
+            # report_url = "mailto:your-email@example.com?subject=Video Annotation Tool - Problem Report"
+            # report_url = "https://forms.gle/your-google-form-id"
+            # report_url = "https://your-website.com/contact"
+            
+            # Open the URL in the default browser
+            QDesktopServices.openUrl(QUrl(report_url))
+            
+        except Exception as e:
+            QMessageBox.warning(self, "Error", 
+                              f"Could not open the report problem link.\n"
+                              f"Error: {str(e)}\n\n"
+                              f"Please manually visit: {report_url}")

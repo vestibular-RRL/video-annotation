@@ -1,29 +1,61 @@
 """
-Video Player Widget
+Video Player Widget with YOLO Segmentation Tracking
 """
 
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
-                             QPushButton, QSlider, QFrame)
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl
+                             QPushButton, QSlider, QFrame, QCheckBox, QFileDialog,
+                             QProgressBar, QMessageBox)
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl, QThread
 from PyQt6.QtMultimedia import QMediaPlayer
 from PyQt6.QtMultimediaWidgets import QVideoWidget
 from PyQt6.QtGui import QAction
 
 from src.core.video_processor import VideoProcessor
+from src.core.object_tracker import ObjectTracker, TrackingResult
 from src.models.video_data import VideoData
+import os
+from typing import Optional
+
+
+class TrackingThread(QThread):
+    """Thread for running object tracking to avoid blocking UI"""
+    tracking_finished = pyqtSignal(dict)
+    progress_updated = pyqtSignal(int)
+    error_occurred = pyqtSignal(str)
+    
+    def __init__(self, tracker, video_path, output_path):
+        super().__init__()
+        self.tracker = tracker
+        self.video_path = video_path
+        self.output_path = output_path
+    
+    def run(self):
+        try:
+            results = self.tracker.track_video(self.video_path, self.output_path)
+            self.tracking_finished.emit(results)
+        except Exception as e:
+            self.error_occurred.emit(str(e))
 
 
 class VideoPlayer(QWidget):
-    """Video player widget using standard media player"""
+    """Video player widget with YOLO segmentation tracking capabilities"""
     
     # Signals
     frame_changed = pyqtSignal(int)  # Emitted when current frame changes
+    tracking_completed = pyqtSignal(dict)  # Emitted when tracking is completed
     
     def __init__(self, parent=None):
         super().__init__(parent)
         self.video_processor = None
         self.video_data = None
         self.current_frame = 1
+        
+        # Object tracking
+        self.object_tracker = None
+        self.tracking_results = {}
+        self.show_tracking = False
+        self.tracking_video_path = None
+        self.tracking_thread = None
         
         self.init_ui()
         self.setup_connections()
@@ -43,6 +75,32 @@ class VideoPlayer(QWidget):
         
         # Configure media player for better compatibility
         self.configure_media_player()
+        
+        # Tracking controls
+        tracking_layout = QHBoxLayout()
+        
+        self.track_button = QPushButton("Start Segmentation Tracking")
+        self.track_button.setEnabled(False)
+        tracking_layout.addWidget(self.track_button)
+        
+        self.show_tracking_checkbox = QCheckBox("Show Tracking Results")
+        self.show_tracking_checkbox.setEnabled(False)
+        tracking_layout.addWidget(self.show_tracking_checkbox)
+        
+        self.export_tracking_button = QPushButton("Export Tracking Data")
+        self.export_tracking_button.setEnabled(False)
+        tracking_layout.addWidget(self.export_tracking_button)
+        
+        self.export_csv_button = QPushButton("Export Tracking CSV")
+        self.export_csv_button.setEnabled(False)
+        tracking_layout.addWidget(self.export_csv_button)
+        
+        layout.addLayout(tracking_layout)
+        
+        # Progress bar for tracking
+        self.tracking_progress = QProgressBar()
+        self.tracking_progress.setVisible(False)
+        layout.addWidget(self.tracking_progress)
         
         # Control buttons
         controls_layout = QHBoxLayout()
@@ -99,15 +157,12 @@ class VideoPlayer(QWidget):
         
         # Slider connections
         self.position_slider.sliderMoved.connect(self.set_position)
-    
-    def set_video_processor(self, processor: VideoProcessor):
-        """Set the video processor (kept for compatibility)"""
-        self.video_processor = processor
-    
-    def set_video_data(self, video_data: VideoData):
-        """Set the video data and load the video"""
-        self.video_data = video_data
-        self.load_video(video_data.file_path)
+        
+        # Tracking connections
+        self.track_button.clicked.connect(self.start_tracking)
+        self.show_tracking_checkbox.toggled.connect(self.toggle_tracking_display)
+        self.export_tracking_button.clicked.connect(self.export_tracking_data)
+        self.export_csv_button.clicked.connect(self.export_tracking_csv)
     
     def load_video(self, file_path: str):
         """Load a video file into the media player"""
@@ -115,7 +170,23 @@ class VideoPlayer(QWidget):
             return
         
         try:
-            # Load the video file
+            # Initialize video processor
+            self.video_processor = VideoProcessor()
+            if not self.video_processor.load_video(file_path):
+                print("Failed to load video with processor")
+                return
+            
+            # Create video data
+            self.video_data = VideoData(
+                file_path=file_path,
+                width=self.video_processor.width,
+                height=self.video_processor.height,
+                fps=self.video_processor.fps,
+                frame_count=self.video_processor.frame_count,
+                duration=self.video_processor.duration
+            )
+            
+            # Load video into media player
             self.media_player.setSource(QUrl.fromLocalFile(file_path))
             
             # Update controls
@@ -124,32 +195,207 @@ class VideoPlayer(QWidget):
             # Connect position updates to frame changes
             self.media_player.positionChanged.connect(self.update_frame_from_position)
             
+            # Enable tracking controls
+            self.track_button.setEnabled(True)
+            self.show_tracking_checkbox.setEnabled(True)
+            
         except Exception as e:
             print(f"Error loading video: {e}")
     
-    def update_controls(self):
-        """Update control states based on video availability"""
-        has_video = self.media_player.mediaStatus() == QMediaPlayer.MediaStatus.LoadedMedia
+    def start_tracking(self):
+        """Start YOLO segmentation tracking on the loaded video"""
+        if not self.video_data:
+            return
         
-        self.play_button.setEnabled(has_video)
-        self.stop_button.setEnabled(has_video)
-        self.prev_button.setEnabled(has_video)
-        self.next_button.setEnabled(has_video)
-        self.position_slider.setEnabled(has_video)
+        try:
+            # Get model path
+            model_path = self.get_model_path()
+            
+            # Initialize object tracker with segmentation model
+            self.object_tracker = ObjectTracker(model_path=model_path)
+            
+            if not self.object_tracker.model:
+                QMessageBox.warning(self, "Model Error", 
+                                  "Failed to load YOLO segmentation model. Please check your model file.")
+                return
+            
+            # Create output path for tracked video
+            base_name = os.path.splitext(self.video_data.file_path)[0]
+            self.tracking_video_path = f"{base_name}_split_tracked.mp4"
+            
+            # Start tracking in a separate thread
+            self.track_button.setText("Split Tracking...")
+            self.track_button.setEnabled(False)
+            self.tracking_progress.setVisible(True)
+            self.tracking_progress.setRange(0, 0)  # Indeterminate progress
+            
+            # Create and start tracking thread
+            self.tracking_thread = TrackingThread(
+                self.object_tracker, 
+                self.video_data.file_path, 
+                self.tracking_video_path
+            )
+            self.tracking_thread.tracking_finished.connect(self.on_tracking_completed)
+            self.tracking_thread.error_occurred.connect(self.on_tracking_error)
+            self.tracking_thread.start()
+            
+        except Exception as e:
+            print(f"Error starting tracking: {e}")
+            self.reset_tracking_ui()
+            QMessageBox.critical(self, "Tracking Error", f"Failed to start tracking: {str(e)}")
+    
+    def on_tracking_completed(self, results):
+        """Handle tracking completion"""
+        self.tracking_results = results
+        self.reset_tracking_ui()
+        self.export_tracking_button.setEnabled(True)
+        self.export_csv_button.setEnabled(True)
         
-        if has_video:
-            self.position_slider.setRange(0, self.media_player.duration())
+        # Set frame dimensions for proper left/right positioning
+        if self.video_data and self.object_tracker:
+            self.object_tracker.set_frame_dimensions(self.video_data.width, self.video_data.height)
+        
+        # Show tracking statistics
+        if self.object_tracker:
+            stats = self.object_tracker.get_tracking_statistics()
+            print(f"Tracking completed: {stats}")
+            
+            # Show completion message with statistics
+            message = (f"Split tracking completed!\n\n"
+                      f"Processed {stats.get('total_frames', 0)} frames\n"
+                      f"Total detections: {stats.get('total_detections', 0)}\n"
+                      f"Total areas: {stats.get('total_areas', 0)}\n"
+                      f"Unique objects: {stats.get('unique_tracked_objects', 0)}")
+            
+            QMessageBox.information(self, "Tracking Complete", message)
+        
+        # Emit signal
+        self.tracking_completed.emit(results)
+    
+    def on_tracking_error(self, error_message):
+        """Handle tracking error"""
+        self.reset_tracking_ui()
+        QMessageBox.critical(self, "Tracking Error", f"Tracking failed: {error_message}")
+    
+    def reset_tracking_ui(self):
+        """Reset tracking UI elements"""
+        self.track_button.setText("Start Split Tracking")
+        self.track_button.setEnabled(True)
+        self.tracking_progress.setVisible(False)
+        self.export_csv_button.setEnabled(False)
+    
+    def toggle_tracking_display(self, show: bool):
+        """Toggle tracking display on/off"""
+        self.show_tracking = show
+        
+        if show and self.tracking_video_path and os.path.exists(self.tracking_video_path):
+            # Load tracked video
+            self.media_player.setSource(QUrl.fromLocalFile(self.tracking_video_path))
+        elif not show and self.video_data:
+            # Load original video
+            self.media_player.setSource(QUrl.fromLocalFile(self.video_data.file_path))
+    
+    def export_tracking_data(self):
+        """Export tracking results to JSON file"""
+        if not self.object_tracker or not self.tracking_results:
+            return
+        
+        try:
+            file_path, _ = QFileDialog.getSaveFileName(
+                self, "Export Tracking Data", "", "JSON Files (*.json)"
+            )
+            
+            if file_path:
+                success = self.object_tracker.export_tracking_data(file_path)
+                if success:
+                    QMessageBox.information(self, "Success", 
+                                          "Segmentation tracking data exported successfully!")
+                else:
+                    QMessageBox.warning(self, "Export Error", 
+                                      "Failed to export tracking data.")
+        
+        except Exception as e:
+            print(f"Error exporting tracking data: {e}")
+            QMessageBox.critical(self, "Export Error", f"Error exporting data: {str(e)}")
+    
+    def export_tracking_csv(self):
+        """Export tracking results to CSV file with left/right position and size data"""
+        if not self.object_tracker or not self.tracking_results:
+            return
+        
+        try:
+            file_path, _ = QFileDialog.getSaveFileName(
+                self, "Export Tracking CSV", "", "CSV Files (*.csv)"
+            )
+            
+            if file_path:
+                success = self.object_tracker.export_tracking_data_to_csv(file_path)
+                if success:
+                    QMessageBox.information(self, "Success", 
+                                          "Tracking data exported to CSV successfully!")
+                else:
+                    QMessageBox.warning(self, "Export Error", 
+                                      "Failed to export tracking data to CSV.")
+        
+        except Exception as e:
+            print(f"Error exporting tracking data to CSV: {e}")
+            QMessageBox.critical(self, "Export Error", f"Error exporting CSV data: {str(e)}")
+    
+    def get_model_path(self) -> str:
+        """Get path to custom YOLO segmentation model"""
+        # Use the specific segmentation model in src/segment_model/
+        model_path = "src/segment_model/best copy.pt"
+        
+        if os.path.exists(model_path):
+            print(f"Using segmentation model: {model_path}")
+            return model_path
+        
+        # Fallback to other possible paths
+        possible_paths = [
+            "models/best.pt",
+            "models/yolov8n-seg-custom.pt", 
+            "models/eye_segmentation.pt",
+            "models/segmentation_model.pt"
+        ]
+        
+        for path in possible_paths:
+            if os.path.exists(path):
+                print(f"Using fallback model: {path}")
+                return path
+        
+        # If no custom model found, show file dialog
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Select YOLO Segmentation Model", "", 
+            "YOLO Models (*.pt);;All Files (*)"
+        )
+        
+        if file_path:
+            return file_path
+        
+        # Return None to use default model
+        print("No custom model found, using default YOLO segmentation model")
+        return None
+    
+    def get_current_tracking_results(self) -> Optional[TrackingResult]:
+        """Get tracking results for current frame"""
+        if not self.tracking_results:
+            return None
+        
+        return self.tracking_results.get(self.current_frame)
     
     def toggle_play(self):
         """Toggle play/pause"""
         if self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
             self.media_player.pause()
+            self.play_button.setText("Play")
         else:
             self.media_player.play()
+            self.play_button.setText("Pause")
     
     def stop(self):
-        """Stop the video and go to beginning"""
+        """Stop playback"""
         self.media_player.stop()
+        self.play_button.setText("Play")
     
     def previous_frame(self):
         """Go to previous frame (skip back 1 second)"""
@@ -258,3 +504,22 @@ class VideoPlayer(QWidget):
     def is_playing(self) -> bool:
         """Check if video is currently playing"""
         return self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
+    
+    def update_controls(self):
+        """Update control button states"""
+        has_media = self.media_player.mediaStatus() == QMediaPlayer.MediaStatus.LoadedMedia
+        
+        self.play_button.setEnabled(has_media)
+        self.stop_button.setEnabled(has_media)
+        self.prev_button.setEnabled(has_media)
+        self.next_button.setEnabled(has_media)
+        self.position_slider.setEnabled(has_media)
+    
+    def set_video_processor(self, processor: VideoProcessor):
+        """Set the video processor (kept for compatibility)"""
+        self.video_processor = processor
+    
+    def set_video_data(self, video_data: VideoData):
+        """Set the video data and load the video"""
+        self.video_data = video_data
+        self.load_video(video_data.file_path)

@@ -27,3 +27,11 @@ ASSETS_DIR = "assets"
 APP_NAME = "Video Annotation Tool"
 APP_VERSION = "1.0.0"
 APP_DESCRIPTION = "A simple tool for annotating video frames with text annotations"
+
+# Report problem URL
+REPORT_PROBLEM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSf9GnqhC3ZgOdxxcjk39FumVU9RjHFtJDUVZrHJ4R_zd2dIZQ/viewform"
+
+# Alternative URLs for reporting problems:
+# REPORT_PROBLEM_URL = "mailto:your-email@example.com?subject=Video Annotation Tool - Problem Report"
+# REPORT_PROBLEM_URL = "https://forms.gle/your-google-form-id"
+# REPORT_PROBLEM_URL = "https://your-website.com/contact"
