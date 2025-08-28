@@ -48,12 +48,7 @@ class StatusBar(QStatusBar):
         self.progress_bar.setMaximumWidth(200)
         self.addPermanentWidget(self.progress_bar)
         
-        # Add tracking info label
-        self.tracking_info_label = QLabel("No tracking data")
-        self.addPermanentWidget(self.tracking_info_label)
-        
-        # Separator
-        self.addPermanentWidget(QLabel("|"))
+
         
         # Report Problem button
         self.report_button = QPushButton("Report Problem")
@@ -89,17 +84,7 @@ class StatusBar(QStatusBar):
         """Update annotation count display"""
         self.annotation_count_label.setText(f"Annotations: {count}")
     
-    def update_tracking_info(self, stats: dict):
-        """Update tracking information display"""
-        if not stats:
-            self.tracking_info_label.setText("No tracking data")
-            return
-        
-        info_text = (f"Tracking: {stats.get('total_frames', 0)} frames, "
-                    f"{stats.get('total_detections', 0)} detections, "
-                    f"{stats.get('total_ellipses', 0)} ellipses, "
-                    f"{stats.get('unique_objects', 0)} objects")
-        self.tracking_info_label.setText(info_text)
+
     
     def show_progress(self, visible: bool = True):
         """Show or hide progress bar"""

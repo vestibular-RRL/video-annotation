@@ -19,9 +19,6 @@ from src.core.csv_exporter import CSVExporter
 from src.models.video_data import VideoData
 from config.constants import SUPPORTED_VIDEO_FORMATS, WINDOW_TITLE, REPORT_PROBLEM_URL
 from config.settings import Settings
-from src.core.object_tracker import ObjectTracker
-
-
 class MainWindow(QMainWindow):
     """Main application window"""
     
@@ -32,9 +29,6 @@ class MainWindow(QMainWindow):
         self.video_data = None
         self.annotation_manager = AnnotationManager()
         self.csv_exporter = CSVExporter()
-        
-        # Add tracking-related attributes
-        self.tracking_results = {}
         
         self.init_ui()
         self.setup_menus()
@@ -230,6 +224,12 @@ class MainWindow(QMainWindow):
         export_action.triggered.connect(self.export_csv)
         file_menu.addAction(export_action)
         
+        # Export CSV with Trimmed Video action
+        export_trimmed_action = QAction("Export CSV with &Trimmed Video...", self)
+        export_trimmed_action.setShortcut("Ctrl+T")
+        export_trimmed_action.triggered.connect(self.export_csv_with_trimmed_video)
+        file_menu.addAction(export_trimmed_action)
+        
         file_menu.addSeparator()
         
         # Exit action
@@ -279,8 +279,7 @@ class MainWindow(QMainWindow):
         # Table connections
         self.annotation_table.itemChanged.connect(self.on_annotation_changed)
         
-        # Connect tracking completion signal
-        self.video_player.tracking_completed.connect(self.on_tracking_completed)
+
     
     def open_video(self):
         """Open a video file"""
@@ -644,14 +643,14 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "Error", f"Failed to save annotations: {str(e)}")
     
     def export_csv(self):
-        """Export annotations to CSV file within the selected time range"""
+        """Export annotations to CSV file with trimmed video within the selected time range"""
         if not self.video_data:
             QMessageBox.warning(self, "Warning", "No video loaded.")
             return
         
         file_path, _ = QFileDialog.getSaveFileName(
             self,
-            "Export CSV",
+            "Export CSV with Trimmed Video",
             "",
             "CSV Files (*.csv)"
         )
@@ -680,16 +679,163 @@ class MainWindow(QMainWindow):
                             "Annotation": annotation_value
                         })
                 
-                # Export to CSV
-                self.csv_exporter.export_annotations_to_csv(data, file_path)
+                # Ask user if they want to create trimmed video
+                reply = QMessageBox.question(
+                    self, 
+                    "Export Options", 
+                    "Do you want to create a trimmed video along with the CSV export?\n\n"
+                    f"This will create a folder with:\n"
+                    f"• Trimmed video (frames {start_frame} to {end_frame})\n"
+                    f"• CSV file with annotations\n"
+                    f"• Summary file",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.Yes
+                )
                 
-                # Show success message with range info
-                start_time_str = self.format_time(start_seconds)
-                end_time_str = self.format_time(end_seconds)
-                QMessageBox.information(self, "Success", f"CSV exported successfully for time range {start_time_str} - {end_time_str}")
+                if reply == QMessageBox.StandardButton.Yes:
+                    # Use the efficient workflow for trimmed video export
+                    self._export_with_trimmed_video_efficient(data, start_frame, end_frame, start_seconds, end_seconds)
+                else:
+                    # Export only CSV
+                    success = self.csv_exporter.export_annotations_to_csv(data, file_path)
+                    
+                    if success:
+                        # Show success message with range info
+                        start_time_str = self.format_time(start_seconds)
+                        end_time_str = self.format_time(end_seconds)
+                        QMessageBox.information(self, "Success", f"CSV exported successfully for time range {start_time_str} - {end_time_str}")
+                    else:
+                        QMessageBox.critical(self, "Error", "Failed to export CSV.")
                 
             except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to export CSV: {str(e)}")
+                QMessageBox.critical(self, "Error", f"Failed to export: {str(e)}")
+    
+    def export_csv_with_trimmed_video(self):
+        """Export annotations to CSV file with trimmed video within the selected time range"""
+        if not self.video_data:
+            QMessageBox.warning(self, "Warning", "No video loaded.")
+            return
+        
+        try:
+            # Get the CSV export range from the sliders (in seconds)
+            start_seconds = self.csv_start_slider.value()
+            end_seconds = self.csv_end_slider.value()
+            
+            # Convert seconds to frame numbers
+            start_frame = self.seconds_to_frame(start_seconds)
+            end_frame = self.seconds_to_frame(end_seconds)
+            
+            # Prepare data for export (only within the selected range)
+            data = []
+            for frame_num in range(start_frame, end_frame + 1):
+                # Get annotation from table
+                table_row = frame_num - 1
+                if table_row < self.annotation_table.rowCount():
+                    annotation_item = self.annotation_table.item(table_row, 1)
+                    annotation_value = annotation_item.text() if annotation_item else "0"
+                    
+                    data.append({
+                        "Frame#": frame_num,
+                        "Annotation": annotation_value
+                    })
+            
+            # Use the efficient workflow
+            self._export_with_trimmed_video_efficient(data, start_frame, end_frame, start_seconds, end_seconds)
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Export Error", f"Failed to export: {str(e)}")
+    
+    def _export_with_trimmed_video_efficient(self, data, start_frame, end_frame, start_seconds, end_seconds):
+        """Helper method for efficient trimmed video export workflow"""
+        # Step 1: Ask for folder name
+        from PyQt6.QtWidgets import QInputDialog, QFileDialog
+        folder_name, ok = QInputDialog.getText(
+            self, 
+            "Export Setup", 
+            "Enter a name for your export folder:\n\n"
+            "This name will be used for:\n"
+            "• The folder itself\n"
+            "• The video file (.mp4)\n"
+            "• The CSV file (.csv)\n"
+            "• The summary file (.txt)\n\n"
+            "Example: 'my_annotation_project'",
+            text=""
+        )
+        
+        if not ok or not folder_name.strip():
+            return  # User cancelled or entered empty name
+        
+        folder_name = folder_name.strip()
+        
+        # Step 2: Choose where to store the folder
+        base_dir = QFileDialog.getExistingDirectory(
+            self,
+            "Choose Location for Export Folder",
+            "",
+            QFileDialog.Option.ShowDirsOnly
+        )
+        
+        if not base_dir:
+            return  # User cancelled
+        
+        # Step 3: Show confirmation with full path
+        full_folder_path = os.path.join(base_dir, folder_name)
+        
+        reply = QMessageBox.question(
+            self,
+            "Confirm Export Location",
+            f"Export will be created at:\n\n"
+            f"📁 {full_folder_path}\n\n"
+            f"Files to be created:\n"
+            f"• {folder_name}.mp4 (trimmed video)\n"
+            f"• {folder_name}.csv (annotations)\n"
+            f"• {folder_name}_summary.txt (details)\n\n"
+            f"Continue with export?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes
+        )
+        
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        
+        try:
+            # Create a temporary CSV path for the export function
+            temp_csv_path = os.path.join(full_folder_path, f"{folder_name}.csv")
+            
+            # Export with trimmed video using the folder name
+            success = self.csv_exporter.export_with_trimmed_video(
+                data=data,
+                output_path=temp_csv_path,
+                video_path=self.video_data.file_path,
+                start_frame=start_frame,
+                end_frame=end_frame,
+                fps=self.video_data.fps,
+                custom_name=folder_name
+            )
+            
+            if success:
+                # Show success message with full details
+                start_time_str = self.format_time(start_seconds)
+                end_time_str = self.format_time(end_seconds)
+                
+                message = f"✅ Export completed successfully!\n\n" \
+                         f"📁 Location: {full_folder_path}\n\n" \
+                         f"📊 Export Details:\n" \
+                         f"• Time range: {start_time_str} - {end_time_str}\n" \
+                         f"• Frame range: {start_frame} - {end_frame}\n" \
+                         f"• Total frames: {end_frame - start_frame + 1}\n\n" \
+                         f"📁 Files created:\n" \
+                         f"• {folder_name}.mp4 (trimmed video)\n" \
+                         f"• {folder_name}.csv (annotations)\n" \
+                         f"• {folder_name}_summary.txt (export details)\n\n" \
+                         f"All files use the same name: '{folder_name}'"
+                
+                QMessageBox.information(self, "Export Success", message)
+            else:
+                QMessageBox.critical(self, "Export Error", "Failed to export with trimmed video.")
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Export Error", f"Failed to export: {str(e)}")
     
     def show_about(self):
         """Show about dialog"""
@@ -702,7 +848,11 @@ class MainWindow(QMainWindow):
             "• Use annotation range sliders or input fields to set time ranges\n"
             "• Use CSV export range sliders or input fields to export specific time ranges\n"
             "• Export annotations to CSV files with frame-level precision\n"
-            "• Direct integer input for precise time control"
+            "• Export with trimmed video - creates a folder with video clip and CSV\n"
+            "• Direct integer input for precise time control\n\n"
+            "Keyboard Shortcuts:\n"
+            "• Ctrl+E: Export CSV\n"
+            "• Ctrl+T: Export CSV with Trimmed Video"
         )
     
     def load_window_settings(self):
@@ -786,43 +936,7 @@ class MainWindow(QMainWindow):
         
         event.accept()
 
-    def on_tracking_completed(self, results):
-        """Handle tracking completion"""
-        self.tracking_results = results
-        
-        # Update status bar
-        if self.status_bar:
-            stats = self.get_tracking_statistics()
-            self.status_bar.update_tracking_info(stats)
-        
-        # Show completion message
-        QMessageBox.information(self, "Tracking Complete", 
-                              f"Split tracking completed!\n"
-                              f"Processed {len(results)} frames.")
-    
-    def get_tracking_statistics(self) -> dict:
-        """Get tracking statistics"""
-        if not self.tracking_results:
-            return {}
-        
-        total_frames = len(self.tracking_results)
-        total_detections = sum(len(result.detections) for result in self.tracking_results.values())
-        total_areas = sum(len(result.bounding_box_areas) for result in self.tracking_results.values())
-        unique_tracking_ids = set()
-        
-        for result in self.tracking_results.values():
-            for detection in result.detections:
-                if detection.get('tracking_id') is not None:
-                    unique_tracking_ids.add(detection['tracking_id'])
-        
-        return {
-            'total_frames': total_frames,
-            'total_detections': total_detections,
-            'total_areas': total_areas,
-            'unique_objects': len(unique_tracking_ids),
-            'avg_detections_per_frame': total_detections / total_frames if total_frames > 0 else 0,
-            'avg_areas_per_frame': total_areas / total_frames if total_frames > 0 else 0
-        }
+
     
     def report_problem(self):
         """Open the report problem link in the default browser"""
