@@ -800,7 +800,7 @@ class MainWindow(QMainWindow):
         
         try:
             # Create a temporary CSV path for the export function
-            temp_csv_path = os.path.join(full_folder_path, f"{folder_name}.csv")
+            temp_csv_path = os.path.join(base_dir, f"{folder_name}.csv")
             
             # Export with trimmed video using the folder name
             success = self.csv_exporter.export_with_trimmed_video(
