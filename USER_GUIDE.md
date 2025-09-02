@@ -2,7 +2,7 @@
 
 ## 🎬 Welcome to Video Annotation Tool!
 
-This guide will help you use the Video Annotation Tool to mark important moments in your videos and save them as organized data.
+This guide will help you use the Video Annotation Tool to mark nystagmus movement in the videos and save them as organized data.
 
 ### What You Can Do
 - **Mark important moments** in your videos
@@ -24,7 +24,7 @@ This guide will help you use the Video Annotation Tool to mark important moments
 - **Right side**: Controls for marking and saving your work
 - **Top**: Menu options (File, Help, etc.)
 - **Bottom**: Information about your video
-![Alt text](assets\media\homescreen.png)
+![Alt text](assets/media/homescreen.png)
 ---
 
 ## 📹 Loading Your First Video
@@ -34,7 +34,7 @@ This guide will help you use the Video Annotation Tool to mark important moments
 2. **Click "Open Video"**
 3. **Find your video file** (supports MP4, AVI, MOV files)
 4. **Click "Open"**
-![Alt text](assets\media\openvideo.png)
+![Alt text](assets/media/openvideo.png)
 ### Step 2: Your Video Appears
 - The video will load and show in the player area
 - You'll see video information at the bottom
@@ -48,7 +48,7 @@ This guide will help you use the Video Annotation Tool to mark important moments
 You have **two sets of controls**:
 1. **Annotation Range** - For marking what happens in the video
 2. **CSV Export Range** - For choosing what to save to files
-![Alt text](assets\media\controlPanel.png)
+![Alt text](assets/media/controlPanel.png)
 ### How to Mark a Time Range
 
 #### Method 1: Using Sliders (Easiest)
@@ -57,7 +57,7 @@ You have **two sets of controls**:
 3. **Move the "End" slider** to where you want to stop marking
 4. **Type a description** in the "Annotation" box (like "Person walking" or "Event starts")
 5. **Click "Apply to Range"**
-![Alt text](assets\media\annotateWslider.gif)
+![Alt text](assets/media/annotateWslider.gif)
 
 
 #### Method 2: Using Time Input (More Precise)
@@ -68,7 +68,7 @@ You have **two sets of controls**:
 5. **Type the end time**
 6. **Press Enter**
 7. **Type your description** and click "Apply to Range"
-![Alt text](assets\media\annotateWinput.gif)
+![Alt text](assets/media/annotateWinput.gif)
 
 ### Example: Marking a 30-second event
 - **Start time**: 01:15 (1 minute 15 seconds)
@@ -92,7 +92,7 @@ After you apply annotations, you'll see a table showing:
 ### Option 1: Export with Video Clip (use the most)
 1. **Set your "CSV Export Range"** (the part you want to save)
 2. **Click "File" → "Export CSV with Trimmed Video"** (or press Ctrl+T)
-3. **Enter a folder name** (like "MyProject")
+3. **Enter a folder name with this format IDXX_typeOfTest_diagnose_numberOfTest_NumberOfEye** (like "ID60_LDH_POSITIVE_T1_2")
 4. **Choose where to save** the folder
 5. **Click "OK"**
 
