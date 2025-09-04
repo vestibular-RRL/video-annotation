@@ -114,7 +114,7 @@ After you apply annotations, you'll see a table showing:
 - A new folder with your chosen name
 - A video clip of just the part you marked
 - A CSV file with your annotations
-- A summary file with details
+- A summary file with details (JSON format)
 
 ---
 

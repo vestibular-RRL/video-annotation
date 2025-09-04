@@ -244,9 +244,9 @@ class CSVExporter:
                 
                 # Create a summary file with custom name
                 if custom_name:
-                    summary_filename = f"{custom_name}_summary.txt"
+                    summary_filename = f"{custom_name}_summary.json"
                 else:
-                    summary_filename = "export_summary.txt"
+                    summary_filename = "export_summary.json"
                 summary_path = os.path.join(output_folder, summary_filename)
                 
                 self._create_summary_file(summary_path, video_path, start_frame, end_frame, 
@@ -265,7 +265,7 @@ class CSVExporter:
                            end_frame: int, fps: float, annotation_count: int, 
                            video_success: bool) -> None:
         """
-        Create a summary file with export details
+        Create a summary file with export details in JSON format
         
         Args:
             summary_path: Path to the summary file
@@ -277,6 +277,7 @@ class CSVExporter:
             video_success: Whether video trimming was successful
         """
         try:
+            import json
             from datetime import datetime
             
             # Calculate duration
@@ -286,38 +287,55 @@ class CSVExporter:
             # Get video info
             video_info = self.video_trimmer.get_video_info(video_path)
             
+            # Create structured data for JSON export
+            summary_data = {
+                "export_info": {
+                    "export_date": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    "export_type": "video_annotation_export"
+                },
+                "original_video": {
+                    "filename": os.path.basename(video_path),
+                    "full_path": video_path,
+                    "resolution": f"{video_info['width']}x{video_info['height']}" if video_info else None,
+                    "fps": round(video_info['fps'], 2) if video_info else None,
+                    "total_frames": video_info['frame_count'] if video_info else None,
+                    "total_duration": self.video_trimmer.format_duration(video_info['duration']) if video_info else None,
+                    "duration_seconds": video_info['duration'] if video_info else None
+                },
+                "exported_range": {
+                    "start_frame": start_frame,
+                    "end_frame": end_frame,
+                    "frame_count": end_frame - start_frame + 1,
+                    "duration": duration_str,
+                    "duration_seconds": duration_seconds,
+                    "fps": round(fps, 2)
+                },
+                "exported_files": {
+                    "video": {
+                        "status": "created" if video_success else "failed",
+                        "success": video_success
+                    },
+                    "csv": {
+                        "status": "created",
+                        "success": True,
+                        "annotation_count": annotation_count
+                    },
+                    "summary": {
+                        "status": "created",
+                        "success": True,
+                        "format": "json"
+                    }
+                },
+                "notes": [
+                    "The trimmed video contains only the specified frame range",
+                    "The CSV file contains annotations for the specified frame range only",
+                    "All files are located in the same folder for easy access"
+                ]
+            }
+            
+            # Write JSON file with proper formatting
             with open(summary_path, 'w', encoding='utf-8') as f:
-                f.write("VIDEO ANNOTATION EXPORT SUMMARY\n")
-                f.write("=" * 40 + "\n\n")
-                
-                f.write(f"Export Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-                
-                f.write("ORIGINAL VIDEO:\n")
-                f.write(f"  File: {os.path.basename(video_path)}\n")
-                f.write(f"  Path: {video_path}\n")
-                if video_info:
-                    f.write(f"  Resolution: {video_info['width']}x{video_info['height']}\n")
-                    f.write(f"  FPS: {video_info['fps']:.2f}\n")
-                    f.write(f"  Total Frames: {video_info['frame_count']}\n")
-                    f.write(f"  Total Duration: {self.video_trimmer.format_duration(video_info['duration'])}\n")
-                f.write("\n")
-                
-                f.write("EXPORTED RANGE:\n")
-                f.write(f"  Start Frame: {start_frame}\n")
-                f.write(f"  End Frame: {end_frame}\n")
-                f.write(f"  Frame Count: {end_frame - start_frame + 1}\n")
-                f.write(f"  Duration: {duration_str}\n")
-                f.write(f"  FPS: {fps:.2f}\n\n")
-                
-                f.write("EXPORTED FILES:\n")
-                f.write(f"  Video: {'✓ Created' if video_success else '✗ Failed'}\n")
-                f.write(f"  CSV: ✓ Created ({annotation_count} annotations)\n")
-                f.write(f"  Summary: ✓ Created\n\n")
-                
-                f.write("NOTES:\n")
-                f.write("- The trimmed video contains only the specified frame range\n")
-                f.write("- The CSV file contains annotations for the specified frame range only\n")
-                f.write("- All files are located in the same folder for easy access\n")
+                json.dump(summary_data, f, indent=2, ensure_ascii=False)
                 
             print(f"Summary file created: {summary_path}")
             
