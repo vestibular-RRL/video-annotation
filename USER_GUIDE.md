@@ -37,9 +37,11 @@ This guide will help you use the Video Annotation Tool to mark nystagmus movemen
 ![Alt text](assets/media/openvideo.png)
 ### Step 2: Your Video Appears
 - The video will load and show in the player area
+- **Audio will automatically play** if your video has sound
 - You'll see video information at the bottom
 - The controls on the right will become active
-
+- Use the volume slider and mute button to control audio
+deo
 ---
 
 ## 🎯 Marking Important Moments
@@ -126,6 +128,11 @@ After you apply annotations, you'll see a table showing:
 - **Go to end**: Press End key
 - **Step forward**: Press Right Arrow
 - **Step backward**: Press Left Arrow
+
+### Audio Controls
+- **Volume**: Use the volume slider to adjust audio level (0-100%)
+- **Mute/Unmute**: Click the 🔊/🔇 button to toggle audio on/off
+- **Audio automatically plays** when you open a video with sound
 
 ### Using the Timeline
 - **Click anywhere** on the timeline to jump to that time
