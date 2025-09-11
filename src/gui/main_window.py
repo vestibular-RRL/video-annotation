@@ -757,7 +757,7 @@ class MainWindow(QMainWindow):
             "• The folder itself\n"
             "• The video file (.mp4)\n"
             "• The CSV file (.csv)\n"
-            "• The summary file (.txt)\n\n"
+            "• The summary file (.json)\n\n"
             "Example: 'my_annotation_project'",
             text=""
         )
@@ -789,7 +789,7 @@ class MainWindow(QMainWindow):
             f"Files to be created:\n"
             f"• {folder_name}.mp4 (trimmed video)\n"
             f"• {folder_name}.csv (annotations)\n"
-            f"• {folder_name}_summary.txt (details)\n\n"
+            f"• {folder_name}_summary.json (details)\n\n"
             f"Continue with export?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.Yes
@@ -827,7 +827,7 @@ class MainWindow(QMainWindow):
                          f"📁 Files created:\n" \
                          f"• {folder_name}.mp4 (trimmed video)\n" \
                          f"• {folder_name}.csv (annotations)\n" \
-                         f"• {folder_name}_summary.txt (export details)\n\n" \
+                         f"• {folder_name}_summary.json (export details)\n\n" \
                          f"All files use the same name: '{folder_name}'"
                 
                 QMessageBox.information(self, "Export Success", message)

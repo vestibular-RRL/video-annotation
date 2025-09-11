@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                              QPushButton, QSlider, QFrame, QCheckBox, QFileDialog,
                              QProgressBar, QMessageBox)
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl
-from PyQt6.QtMultimedia import QMediaPlayer
+from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PyQt6.QtMultimediaWidgets import QVideoWidget
 from PyQt6.QtGui import QAction
 
@@ -27,6 +27,8 @@ class VideoPlayer(QWidget):
         self.video_processor = None
         self.video_data = None
         self.current_frame = 1
+        self.audio_output = None
+        self.stored_volume = 1.0  # Store volume when muting
         
         self.init_ui()
         self.setup_connections()
@@ -40,9 +42,13 @@ class VideoPlayer(QWidget):
         self.video_widget.setMinimumSize(640, 480)
         layout.addWidget(self.video_widget)
         
+        # Audio output
+        self.audio_output = QAudioOutput()
+        
         # Media player
         self.media_player = QMediaPlayer()
         self.media_player.setVideoOutput(self.video_widget)
+        self.media_player.setAudioOutput(self.audio_output)
         
         # Configure media player for better compatibility
         self.configure_media_player()
@@ -68,6 +74,13 @@ class VideoPlayer(QWidget):
         self.next_button.setEnabled(False)
         controls_layout.addWidget(self.next_button)
         
+        # Audio controls
+        self.mute_button = QPushButton("🔊")
+        self.mute_button.setEnabled(False)
+        self.mute_button.setToolTip("Mute/Unmute audio")
+        self.mute_button.setMaximumWidth(40)
+        controls_layout.addWidget(self.mute_button)
+        
         layout.addLayout(controls_layout)
         
         # Position slider
@@ -82,6 +95,27 @@ class VideoPlayer(QWidget):
         slider_layout.addWidget(self.position_label)
         
         layout.addLayout(slider_layout)
+        
+        # Volume control
+        volume_layout = QHBoxLayout()
+        volume_layout.addWidget(QLabel("Volume:"))
+        
+        self.volume_slider = QSlider(Qt.Orientation.Horizontal)
+        self.volume_slider.setRange(0, 100)
+        self.volume_slider.setValue(100)  # Default to full volume
+        self.volume_slider.setEnabled(False)
+        self.volume_slider.setMaximumWidth(150)
+        self.volume_slider.setToolTip("Adjust audio volume")
+        volume_layout.addWidget(self.volume_slider)
+        
+        self.volume_label = QLabel("100%")
+        self.volume_label.setMinimumWidth(40)
+        volume_layout.addWidget(self.volume_label)
+        
+        # Add stretch to push volume controls to the right
+        volume_layout.addStretch()
+        
+        layout.addLayout(volume_layout)
     
     def configure_media_player(self):
         """Configure media player for better compatibility"""
@@ -101,9 +135,11 @@ class VideoPlayer(QWidget):
         self.stop_button.clicked.connect(self.stop)
         self.prev_button.clicked.connect(self.previous_frame)
         self.next_button.clicked.connect(self.next_frame)
+        self.mute_button.clicked.connect(self.toggle_mute)
         
         # Slider connections
         self.position_slider.sliderMoved.connect(self.set_position)
+        self.volume_slider.valueChanged.connect(self.set_volume)
         
 
     
@@ -189,6 +225,38 @@ class VideoPlayer(QWidget):
     def set_position(self, position: int):
         """Set the media player position"""
         self.media_player.setPosition(position)
+    
+    def set_volume(self, volume: int):
+        """Set the audio volume (0-100)"""
+        if self.audio_output:
+            # Convert 0-100 to 0.0-1.0 range
+            volume_float = volume / 100.0
+            self.audio_output.setVolume(volume_float)
+            self.volume_label.setText(f"{volume}%")
+            
+            # Update mute button icon based on volume
+            if volume == 0:
+                self.mute_button.setText("🔇")
+            else:
+                self.mute_button.setText("🔊")
+    
+    def toggle_mute(self):
+        """Toggle audio mute/unmute"""
+        if self.audio_output:
+            current_volume = self.audio_output.volume()
+            if current_volume > 0:
+                # Store current volume and mute
+                self.stored_volume = current_volume
+                self.audio_output.setVolume(0.0)
+                self.volume_slider.setValue(0)
+                self.mute_button.setText("🔇")
+            else:
+                # Restore previous volume
+                restored_volume = getattr(self, 'stored_volume', 1.0)
+                self.audio_output.setVolume(restored_volume)
+                volume_percent = int(restored_volume * 100)
+                self.volume_slider.setValue(volume_percent)
+                self.mute_button.setText("🔊")
     
     def on_position_changed(self, position: int):
         """Handle position changes from media player"""
@@ -280,6 +348,8 @@ class VideoPlayer(QWidget):
         self.prev_button.setEnabled(has_media)
         self.next_button.setEnabled(has_media)
         self.position_slider.setEnabled(has_media)
+        self.mute_button.setEnabled(has_media)
+        self.volume_slider.setEnabled(has_media)
     
     def set_video_processor(self, processor: VideoProcessor):
         """Set the video processor (kept for compatibility)"""
