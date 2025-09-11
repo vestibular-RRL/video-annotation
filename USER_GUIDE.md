@@ -86,6 +86,11 @@ You have **two sets of controls**:
 After you apply annotations, you'll see a table showing:
 - **Frame#**: Which frame number
 - **Annotation**: What you marked for that frame
+    - upbeat
+    - downbeat
+    - left beat
+    - right beat
+
 
 ---
 
