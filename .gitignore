@@ -131,7 +131,7 @@ dmypy.json
 # Application specific
 data/
 config/app_settings.json
-*.mp4
+# *.mp4
 *.avi
 *.mov
 *.mkv
