@@ -91,6 +91,18 @@ class Settings:
             
             # Annotation settings
             "default_annotation": "0",
+            # Options for annotation dropdown (list of strings or numbers)
+            "annotation_options": [
+                "0",
+                "downbeat",
+                "upbeat",
+                "left beat",
+                "right beat",
+                "mix",
+                "rotational right",
+                "rotational left",
+                "unsure"
+            ],
             
             # Application settings
             "auto_save_interval": 30,  # seconds

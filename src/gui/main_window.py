@@ -7,7 +7,7 @@ import os
 from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                              QSplitter, QMenuBar, QMenu, QFileDialog, QMessageBox,
                              QTableWidget, QTableWidgetItem, QHeaderView, QSlider,
-                             QLabel, QLineEdit, QPushButton)
+                             QLabel, QLineEdit, QPushButton, QComboBox)
 from PyQt6.QtCore import Qt, pyqtSignal, QUrl
 from PyQt6.QtGui import QAction, QKeySequence, QDesktopServices
 
@@ -113,8 +113,35 @@ class MainWindow(QMainWindow):
         annotation_layout = QHBoxLayout()
         annotation_layout.addWidget(QLabel("Annotation:"))
         
-        self.annotation_input = QLineEdit()
-        self.annotation_input.setPlaceholderText("Enter annotation text...")
+        # Use a dropdown (QComboBox) for annotation options instead of free text
+        self.annotation_input = QComboBox()
+        # Allow the user to type custom values in case they want (optional)
+        self.annotation_input.setEditable(False)
+        # Populate with options from settings if available; fallback to descriptive defaults.
+        options = None
+        try:
+            if self.settings is not None:
+                options = self.settings.get("annotation_options", None)
+        except Exception as e:
+            # Print the error so it's visible when running from console or logs
+            print(f"Warning: failed to read annotation_options from settings: {e}")
+
+        if options and isinstance(options, list) and len(options) > 0:
+            self.annotation_input.addItems([str(o) for o in options])
+        else:
+            # Fallback descriptive defaults (used when settings missing or empty)
+            self.annotation_input.addItems([
+                "0",
+                "downbeat",
+                "upbeat",
+                "left beat",
+                "right beat",
+                "mix",
+                "rotational right",
+                "rotational left",
+                "unsure"
+            ])
+
         annotation_layout.addWidget(self.annotation_input)
         
         self.apply_button = QPushButton("Apply to Range")
@@ -563,9 +590,10 @@ class MainWindow(QMainWindow):
         if not self.video_data:
             return
         
-        annotation_text = self.annotation_input.text().strip()
+        # Get annotation from dropdown current selection
+        annotation_text = str(self.annotation_input.currentText()).strip()
         if not annotation_text:
-            QMessageBox.warning(self, "Warning", "Please enter an annotation text.")
+            QMessageBox.warning(self, "Warning", "Please select an annotation option.")
             return
         
         # Get the range from the sliders (in seconds)
@@ -591,8 +619,11 @@ class MainWindow(QMainWindow):
         # Update status bar
         self.status_bar.update_annotation_count(self.annotation_manager.get_total_annotations())
         
-        # Clear the input
-        self.annotation_input.clear()
+        # Optionally reset dropdown to first option
+        try:
+            self.annotation_input.setCurrentIndex(0)
+        except Exception:
+            pass
         
         # Convert back to time for display
         start_time_str = self.format_time(start_seconds)
