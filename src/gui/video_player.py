@@ -4,11 +4,13 @@ Video Player Widget
 
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                              QPushButton, QSlider, QFrame, QCheckBox, QFileDialog,
-                             QProgressBar, QMessageBox)
+                             QProgressBar, QMessageBox, QSizePolicy)
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PyQt6.QtMultimediaWidgets import QVideoWidget
-from PyQt6.QtGui import QAction
+from PyQt6.QtGui import QAction, QPixmap, QImage
+import cv2
+import numpy as np
 
 from src.core.video_processor import VideoProcessor
 from src.models.video_data import VideoData
@@ -29,6 +31,10 @@ class VideoPlayer(QWidget):
         self.current_frame = 1
         self.audio_output = None
         self.stored_volume = 1.0  # Store volume when muting
+        self.use_custom_display = False  # Flag to determine display method
+        self.frame_timer = QTimer()
+        self.frame_timer.timeout.connect(self.update_custom_frame)
+        self.is_playing = False
         
         self.init_ui()
         self.setup_connections()
@@ -37,10 +43,22 @@ class VideoPlayer(QWidget):
         """Initialize the user interface"""
         layout = QVBoxLayout(self)
         
-        # Video display area using QVideoWidget
+        # Video display area - we'll switch between QVideoWidget and QLabel
         self.video_widget = QVideoWidget()
         self.video_widget.setMinimumSize(640, 480)
+        
+        self.video_label = QLabel()
+        self.video_label.setMinimumSize(640, 480)
+        self.video_label.setStyleSheet("background-color: black; border: 1px solid gray;")
+        self.video_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.video_label.setText("No video loaded")
+        self.video_label.hide()  # Hide initially
+        # Use expanding size policy to match QVideoWidget behavior
+        self.video_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.video_label.setScaledContents(True)  # Let Qt handle the scaling
+        
         layout.addWidget(self.video_widget)
+        layout.addWidget(self.video_label)
         
         # Audio output
         self.audio_output = QAudioOutput()
@@ -122,6 +140,96 @@ class VideoPlayer(QWidget):
         # Set playback rate to normal
         self.media_player.setPlaybackRate(1.0)
     
+    def detect_video_codec(self, file_path: str) -> str:
+        """Detect the video codec"""
+        try:
+            cap = cv2.VideoCapture(file_path)
+            if not cap.isOpened():
+                return "unknown"
+            
+            fourcc = int(cap.get(cv2.CAP_PROP_FOURCC))
+            codec_str = "".join([chr((fourcc >> 8 * i) & 0xFF) for i in range(4)])
+            cap.release()
+            return codec_str
+        except:
+            return "unknown"
+    
+    def switch_to_custom_display(self):
+        """Switch to custom OpenCV-based display"""
+        self.use_custom_display = True
+        self.video_widget.hide()
+        self.video_label.show()
+        self.media_player.setVideoOutput(None)  # Disconnect video output
+        
+        # Initialize position slider for custom display
+        if self.video_data:
+            self.position_slider.setRange(0, 1000)
+            self.position_slider.setValue(0)
+        
+        print("Switched to custom display for unsupported codec")
+    
+    def switch_to_media_player(self):
+        """Switch to QMediaPlayer display"""
+        self.use_custom_display = False
+        self.video_label.hide()
+        self.video_widget.show()
+        self.media_player.setVideoOutput(self.video_widget)
+        print("Using QMediaPlayer display")
+    
+    def cv2_to_qpixmap(self, cv_image):
+        """Convert OpenCV image to QPixmap for display"""
+        if cv_image is None:
+            return None
+        
+        # Convert BGR to RGB
+        rgb_image = cv2.cvtColor(cv_image, cv2.COLOR_BGR2RGB)
+        
+        # Get image dimensions
+        h, w, ch = rgb_image.shape
+        bytes_per_line = ch * w
+        
+        # Create QImage from numpy array
+        qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
+        
+        # Convert to QPixmap
+        pixmap = QPixmap.fromImage(qt_image)
+        
+        return pixmap
+    
+    def update_custom_frame(self):
+        """Update the custom frame display"""
+        if not self.video_processor or not self.video_data:
+            return
+        
+        # Get current frame from video processor
+        frame = self.video_processor.get_frame(self.current_frame)
+        if frame is not None:
+            # Convert OpenCV frame to QPixmap
+            pixmap = self.cv2_to_qpixmap(frame)
+            if pixmap:
+                # Set the pixmap directly - Qt will handle scaling with setScaledContents(True)
+                self.video_label.setPixmap(pixmap)
+        
+        # Emit frame changed signal
+        self.frame_changed.emit(self.current_frame)
+        
+        # Update position slider
+        if self.video_data and self.video_data.total_frames > 0:
+            position = int((self.current_frame - 1) / self.video_data.total_frames * 1000)
+            self.position_slider.setValue(position)
+            
+            # Update position label
+            current_time = (self.current_frame - 1) / self.video_data.fps
+            total_time = self.video_data.duration
+            self.update_position_label(int(current_time * 1000), int(total_time * 1000))
+        
+        # Move to next frame if playing
+        if self.is_playing:
+            self.current_frame += 1
+            if self.current_frame > self.video_data.total_frames:
+                self.current_frame = self.video_data.total_frames
+                self.stop()
+    
     def setup_connections(self):
         """Set up signal connections"""
         # Media player connections
@@ -144,11 +252,17 @@ class VideoPlayer(QWidget):
 
     
     def load_video(self, file_path: str):
-        """Load a video file into the media player"""
+        """Load a video file with automatic codec detection and display method selection"""
         if not file_path:
             return
         
         try:
+            print(f"Loading video: {file_path}")
+            
+            # Detect video codec
+            codec = self.detect_video_codec(file_path)
+            print(f"Detected codec: {codec}")
+            
             # Initialize video processor
             self.video_processor = VideoProcessor()
             if not self.video_processor.load_video(file_path):
@@ -165,16 +279,30 @@ class VideoPlayer(QWidget):
                 duration=self.video_processor.duration
             )
             
-            # Load video into media player
-            self.media_player.setSource(QUrl.fromLocalFile(file_path))
+            # Choose display method based on codec
+            if codec in ['AV01', 'av01']:  # AV1 codec
+                print("AV1 codec detected - using custom display")
+                self.switch_to_custom_display()
+                # Load first frame immediately
+                self.current_frame = 1
+                self.update_custom_frame()
+            else:  # H.264, H.265, etc.
+                print(f"{codec} codec detected - using QMediaPlayer")
+                self.switch_to_media_player()
+                try:
+                    self.media_player.setSource(QUrl.fromLocalFile(file_path))
+                    print("Video loaded successfully into media player")
+                except Exception as e:
+                    print(f"Media player failed, falling back to custom display: {e}")
+                    self.switch_to_custom_display()
+                    self.current_frame = 1
+                    self.update_custom_frame()
             
             # Update controls
             self.update_controls()
             
             # Connect position updates to frame changes
             self.media_player.positionChanged.connect(self.update_frame_from_position)
-            
-
             
         except Exception as e:
             print(f"Error loading video: {e}")
@@ -187,44 +315,115 @@ class VideoPlayer(QWidget):
     
     def toggle_play(self):
         """Toggle play/pause"""
-        if self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
-            self.media_player.pause()
-            self.play_button.setText("Play")
+        if not self.video_processor or not self.video_data:
+            return
+            
+        if self.use_custom_display:
+            # Custom display mode
+            if self.is_playing:
+                self.pause()
+            else:
+                self.play()
         else:
-            self.media_player.play()
-            self.play_button.setText("Pause")
+            # QMediaPlayer mode
+            if self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+                self.media_player.pause()
+                self.play_button.setText("Play")
+            else:
+                self.media_player.play()
+                self.play_button.setText("Pause")
+    
+    def play(self):
+        """Start playback (custom display mode)"""
+        if not self.video_processor or not self.video_data:
+            return
+            
+        self.is_playing = True
+        self.play_button.setText("Pause")
+        
+        # Start frame timer based on video FPS
+        fps = self.video_data.fps
+        if fps > 0:
+            interval = int(1000 / fps)  # Convert to milliseconds
+            self.frame_timer.start(interval)
+    
+    def pause(self):
+        """Pause playback (custom display mode)"""
+        self.is_playing = False
+        self.play_button.setText("Play")
+        self.frame_timer.stop()
     
     def stop(self):
         """Stop playback"""
-        self.media_player.stop()
-        self.play_button.setText("Play")
+        if self.use_custom_display:
+            self.is_playing = False
+            self.play_button.setText("Play")
+            self.frame_timer.stop()
+            self.current_frame = 1
+            self.update_custom_frame()
+            self.frame_changed.emit(self.current_frame)
+        else:
+            self.media_player.stop()
+            self.play_button.setText("Play")
     
     def previous_frame(self):
         """Go to previous frame (skip back 1 second)"""
-        current_pos = self.media_player.position()
-        new_pos = max(0, current_pos - 1000)  # 1 second back
-        self.media_player.setPosition(new_pos)
+        if self.use_custom_display:
+            # Custom display mode - go back by frames
+            if self.video_data and self.video_data.fps > 0:
+                frames_to_skip = int(self.video_data.fps)  # 1 second worth of frames
+                self.current_frame = max(1, self.current_frame - frames_to_skip)
+                self.update_custom_frame()
+        else:
+            # QMediaPlayer mode
+            current_pos = self.media_player.position()
+            new_pos = max(0, current_pos - 1000)  # 1 second back
+            self.media_player.setPosition(new_pos)
     
     def next_frame(self):
         """Go to next frame (skip forward 1 second)"""
-        current_pos = self.media_player.position()
-        duration = self.media_player.duration()
-        new_pos = min(duration, current_pos + 1000)  # 1 second forward
-        self.media_player.setPosition(new_pos)
+        if self.use_custom_display:
+            # Custom display mode - go forward by frames
+            if self.video_data and self.video_data.fps > 0:
+                frames_to_skip = int(self.video_data.fps)  # 1 second worth of frames
+                self.current_frame = min(self.video_data.total_frames, self.current_frame + frames_to_skip)
+                self.update_custom_frame()
+        else:
+            # QMediaPlayer mode
+            current_pos = self.media_player.position()
+            duration = self.media_player.duration()
+            new_pos = min(duration, current_pos + 1000)  # 1 second forward
+            self.media_player.setPosition(new_pos)
     
     def seek_to_frame(self, frame_number: int):
         """Seek to a specific frame"""
         if not self.video_data:
             return
         
-        if 1 <= frame_number <= self.video_data.total_frames:
-            # Calculate position based on frame number
-            frame_time = (frame_number - 1) / self.video_data.fps * 1000  # Convert to milliseconds
-            self.media_player.setPosition(int(frame_time))
+        frame_number = max(1, min(frame_number, self.video_data.total_frames))
+        
+        if self.use_custom_display:
+            self.current_frame = frame_number
+            self.update_custom_frame()
+        else:
+            # Convert frame to time for QMediaPlayer
+            time_ms = int((frame_number - 1) / self.video_data.fps * 1000)
+            self.media_player.setPosition(time_ms)
     
     def set_position(self, position: int):
-        """Set the media player position"""
-        self.media_player.setPosition(position)
+        """Set video position from slider"""
+        if not self.video_data:
+            return
+            
+        if self.use_custom_display:
+            # Convert position to frame number
+            frame_number = int(position / 1000.0 * self.video_data.total_frames) + 1
+            frame_number = max(1, min(frame_number, self.video_data.total_frames))
+            self.current_frame = frame_number
+            self.update_custom_frame()
+        else:
+            self.media_player.setPosition(position)
+    
     
     def set_volume(self, volume: int):
         """Set the audio volume (0-100)"""
@@ -341,7 +540,12 @@ class VideoPlayer(QWidget):
     
     def update_controls(self):
         """Update control button states"""
-        has_media = self.media_player.mediaStatus() == QMediaPlayer.MediaStatus.LoadedMedia
+        if self.use_custom_display:
+            # Custom display mode - enable controls if we have video data
+            has_media = self.video_data is not None and self.video_processor is not None
+        else:
+            # QMediaPlayer mode - check media status
+            has_media = self.media_player.mediaStatus() == QMediaPlayer.MediaStatus.LoadedMedia
         
         self.play_button.setEnabled(has_media)
         self.stop_button.setEnabled(has_media)
