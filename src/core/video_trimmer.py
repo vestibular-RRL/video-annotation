@@ -16,9 +16,9 @@ class VideoTrimmer:
     def __init__(self):
         self.ffmpeg_available = self._check_ffmpeg_availability()
         if self.ffmpeg_available:
-            print("✓ FFmpeg is available - using fast video trimming")
+            print("[OK] FFmpeg is available - using fast video trimming")
         else:
-            print("⚠ FFmpeg not found - falling back to OpenCV (slower)")
+            print("[WARNING] FFmpeg not found - falling back to OpenCV (slower)")
     
     def _check_ffmpeg_availability(self) -> bool:
         """Check if FFmpeg is available on the system"""
