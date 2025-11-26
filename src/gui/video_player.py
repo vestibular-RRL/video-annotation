@@ -8,14 +8,14 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PyQt6.QtMultimediaWidgets import QVideoWidget
-from PyQt6.QtGui import QAction, QPixmap, QImage
+from PyQt6.QtGui import QAction
 import cv2
-import numpy as np
+import vlc
+import os
+from typing import Optional
 
 from src.core.video_processor import VideoProcessor
 from src.models.video_data import VideoData
-import os
-from typing import Optional
 
 
 class VideoPlayer(QWidget):
@@ -31,10 +31,13 @@ class VideoPlayer(QWidget):
         self.current_frame = 1
         self.audio_output = None
         self.stored_volume = 1.0  # Store volume when muting
-        self.use_custom_display = False  # Flag to determine display method
-        self.frame_timer = QTimer()
-        self.frame_timer.timeout.connect(self.update_custom_frame)
-        self.is_playing = False
+        self.use_vlc = False  # Flag to determine display method
+        self.vlc_instance = None
+        self.vlc_player = None
+        self.vlc_widget = None
+        # Timer to update position slider for VLC
+        self.vlc_position_timer = QTimer()
+        self.vlc_position_timer.timeout.connect(self.update_vlc_position)
         
         self.init_ui()
         self.setup_connections()
@@ -43,22 +46,10 @@ class VideoPlayer(QWidget):
         """Initialize the user interface"""
         layout = QVBoxLayout(self)
         
-        # Video display area - we'll switch between QVideoWidget and QLabel
+        # Video display area - we'll switch between QVideoWidget and VLC widget
         self.video_widget = QVideoWidget()
         self.video_widget.setMinimumSize(640, 480)
-        
-        self.video_label = QLabel()
-        self.video_label.setMinimumSize(640, 480)
-        self.video_label.setStyleSheet("background-color: black; border: 1px solid gray;")
-        self.video_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.video_label.setText("No video loaded")
-        self.video_label.hide()  # Hide initially
-        # Use expanding size policy to match QVideoWidget behavior
-        self.video_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.video_label.setScaledContents(True)  # Let Qt handle the scaling
-        
         layout.addWidget(self.video_widget)
-        layout.addWidget(self.video_label)
         
         # Audio output
         self.audio_output = QAudioOutput()
@@ -70,6 +61,9 @@ class VideoPlayer(QWidget):
         
         # Configure media player for better compatibility
         self.configure_media_player()
+        
+        # Set up VLC position timer (update less frequently to reduce overhead)
+        self.vlc_position_timer.setInterval(200)  # Update every 200ms (reduced from 100ms)
         
 
         
@@ -154,81 +148,75 @@ class VideoPlayer(QWidget):
         except:
             return "unknown"
     
-    def switch_to_custom_display(self):
-        """Switch to custom OpenCV-based display"""
-        self.use_custom_display = True
+    def switch_to_vlc(self):
+        """Switch to VLC-based display for AV1 videos"""
+        self.use_vlc = True
         self.video_widget.hide()
-        self.video_label.show()
-        self.media_player.setVideoOutput(None)  # Disconnect video output
         
-        # Initialize position slider for custom display
-        if self.video_data:
-            self.position_slider.setRange(0, 1000)
-            self.position_slider.setValue(0)
+        # Initialize VLC instance if not already done
+        if self.vlc_instance is None:
+            # Configure VLC for better performance
+            vlc_args = [
+                '--intf', 'dummy',  # No interface
+                '--no-audio-time-stretch',  # Disable audio time stretching
+                '--avcodec-hw=any',  # Enable hardware acceleration
+                '--live-caching=300',  # Set cache to 300ms for better performance
+                '--network-caching=300',  # Network cache
+                '--drop-late-frames',  # Drop late frames to prevent lag
+                '--skip-frames',  # Skip frames if needed
+            ]
+            self.vlc_instance = vlc.Instance(vlc_args)
+            self.vlc_player = self.vlc_instance.media_player_new()
+            
+            # Set additional performance options
+            try:
+                # Enable hardware decoding if available
+                self.vlc_player.video_set_decode_device('d3d11', 0)  # Windows Direct3D11
+            except:
+                pass  # Fallback if not available
         
-        print("Switched to custom display for unsupported codec")
+        # Create VLC widget
+        if self.vlc_widget is None:
+            self.vlc_widget = QWidget()
+            self.vlc_widget.setMinimumSize(640, 480)
+            self.vlc_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+            self.vlc_widget.setStyleSheet("background-color: black;")  # Black background
+            # Get the layout and insert VLC widget before controls
+            layout = self.layout()
+            layout.insertWidget(0, self.vlc_widget)
+        
+        # Ensure widget is visible and raised
+        self.vlc_widget.show()
+        self.vlc_widget.raise_()
+        
+        # Set VLC output to widget (Windows) - must be done after widget is shown
+        try:
+            # For Windows, use winId() to get the window handle
+            # Need to ensure widget is visible first
+            if hasattr(self.vlc_widget, 'winId'):
+                win_id = self.vlc_widget.winId()
+                if win_id:
+                    self.vlc_player.set_hwnd(int(win_id))
+                    print(f"VLC window handle set: {win_id}")
+                else:
+                    print("Warning: VLC widget winId is None")
+            else:
+                print("Warning: VLC widget does not have winId method")
+        except Exception as e:
+            print(f"Warning: Could not set VLC window handle: {e}")
+            import traceback
+            traceback.print_exc()
+        
+        print("Switched to VLC display for AV1 codec")
     
     def switch_to_media_player(self):
         """Switch to QMediaPlayer display"""
-        self.use_custom_display = False
-        self.video_label.hide()
+        self.use_vlc = False
+        if self.vlc_widget:
+            self.vlc_widget.hide()
         self.video_widget.show()
         self.media_player.setVideoOutput(self.video_widget)
         print("Using QMediaPlayer display")
-    
-    def cv2_to_qpixmap(self, cv_image):
-        """Convert OpenCV image to QPixmap for display"""
-        if cv_image is None:
-            return None
-        
-        # Convert BGR to RGB
-        rgb_image = cv2.cvtColor(cv_image, cv2.COLOR_BGR2RGB)
-        
-        # Get image dimensions
-        h, w, ch = rgb_image.shape
-        bytes_per_line = ch * w
-        
-        # Create QImage from numpy array
-        qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
-        
-        # Convert to QPixmap
-        pixmap = QPixmap.fromImage(qt_image)
-        
-        return pixmap
-    
-    def update_custom_frame(self):
-        """Update the custom frame display"""
-        if not self.video_processor or not self.video_data:
-            return
-        
-        # Get current frame from video processor
-        frame = self.video_processor.get_frame(self.current_frame)
-        if frame is not None:
-            # Convert OpenCV frame to QPixmap
-            pixmap = self.cv2_to_qpixmap(frame)
-            if pixmap:
-                # Set the pixmap directly - Qt will handle scaling with setScaledContents(True)
-                self.video_label.setPixmap(pixmap)
-        
-        # Emit frame changed signal
-        self.frame_changed.emit(self.current_frame)
-        
-        # Update position slider
-        if self.video_data and self.video_data.total_frames > 0:
-            position = int((self.current_frame - 1) / self.video_data.total_frames * 1000)
-            self.position_slider.setValue(position)
-            
-            # Update position label
-            current_time = (self.current_frame - 1) / self.video_data.fps
-            total_time = self.video_data.duration
-            self.update_position_label(int(current_time * 1000), int(total_time * 1000))
-        
-        # Move to next frame if playing
-        if self.is_playing:
-            self.current_frame += 1
-            if self.current_frame > self.video_data.total_frames:
-                self.current_frame = self.video_data.total_frames
-                self.stop()
     
     def setup_connections(self):
         """Set up signal connections"""
@@ -259,6 +247,19 @@ class VideoPlayer(QWidget):
         try:
             print(f"Loading video: {file_path}")
             
+            # Stop any current playback first
+            if self.use_vlc and self.vlc_player:
+                try:
+                    self.vlc_player.stop()
+                    self.vlc_position_timer.stop()
+                except:
+                    pass
+            elif self.media_player:
+                try:
+                    self.media_player.stop()
+                except:
+                    pass
+            
             # Detect video codec
             codec = self.detect_video_codec(file_path)
             print(f"Detected codec: {codec}")
@@ -278,25 +279,74 @@ class VideoPlayer(QWidget):
                 frame_count=self.video_processor.frame_count,
                 duration=self.video_processor.duration
             )
+            print(f"Video FPS: {self.video_data.fps}, Frame count: {self.video_data.total_frames}, Duration: {self.video_data.duration:.2f}s")
             
             # Choose display method based on codec
             if codec in ['AV01', 'av01']:  # AV1 codec
-                print("AV1 codec detected - using custom display")
-                self.switch_to_custom_display()
-                # Load first frame immediately
-                self.current_frame = 1
-                self.update_custom_frame()
+                print("AV1 codec detected - using VLC")
+                self.switch_to_vlc()
+                
+                # Ensure VLC widget is visible
+                if self.vlc_widget:
+                    self.vlc_widget.show()
+                    self.vlc_widget.raise_()
+                
+                # Load video in VLC with performance options
+                try:
+                    media = self.vlc_instance.media_new(file_path)
+                    if not media:
+                        raise Exception("Failed to create VLC media object")
+                    
+                    # Add performance options to media
+                    media.add_options(
+                        ':avcodec-hw=any',  # Hardware acceleration
+                        ':live-caching=300',  # Cache for smooth playback
+                        ':drop-late-frames',  # Drop late frames
+                    )
+                    self.vlc_player.set_media(media)
+                    
+                    # Parse media to get duration (non-blocking)
+                    try:
+                        media.parse_async(0, None, None)  # Async parse
+                    except:
+                        media.parse()  # Fallback to sync parse
+                    
+                    # Verify VLC widget is properly set up (already done in switch_to_vlc, but double-check)
+                    if self.vlc_widget and hasattr(self.vlc_widget, 'winId'):
+                        try:
+                            win_id = self.vlc_widget.winId()
+                            if win_id:
+                                self.vlc_player.set_hwnd(int(win_id))
+                                print(f"VLC widget window ID verified: {win_id}")
+                        except Exception as e:
+                            print(f"Warning: Could not verify VLC window handle: {e}")
+                    
+                    print("Video loaded successfully into VLC")
+                    
+                    # Set position slider range (0-1000 for percentage-based positioning)
+                    self.position_slider.setRange(0, 1000)
+                    self.position_slider.setValue(0)
+                except Exception as e:
+                    print(f"Error loading video in VLC: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    # Fallback: try to show first frame using video processor
+                    if self.video_processor:
+                        print("Attempting fallback display...")
+                        # Could add fallback display here if needed
             else:  # H.264, H.265, etc.
-                print(f"{codec} codec detected - using QMediaPlayer")
+                print(f"{codec} codec detected - trying QMediaPlayer first")
                 self.switch_to_media_player()
                 try:
                     self.media_player.setSource(QUrl.fromLocalFile(file_path))
                     print("Video loaded successfully into media player")
+                    
+                    # Check if QMediaPlayer can actually play this video
+                    # Wait a moment for media to load, then check status
+                    QTimer.singleShot(500, lambda: self._check_qmediaplayer_status(file_path))
                 except Exception as e:
-                    print(f"Media player failed, falling back to custom display: {e}")
-                    self.switch_to_custom_display()
-                    self.current_frame = 1
-                    self.update_custom_frame()
+                    print(f"Media player failed, falling back to VLC: {e}")
+                    self._fallback_to_vlc(file_path)
             
             # Update controls
             self.update_controls()
@@ -318,12 +368,28 @@ class VideoPlayer(QWidget):
         if not self.video_processor or not self.video_data:
             return
             
-        if self.use_custom_display:
-            # Custom display mode
-            if self.is_playing:
-                self.pause()
+        if self.use_vlc:
+            # VLC mode
+            state = self.vlc_player.get_state()
+            is_playing = self.vlc_player.is_playing()
+            
+            # Check if video has ended
+            if state == vlc.State.Ended:
+                # Restart from beginning - stop first, then reset, then play
+                self.vlc_player.stop()
+                # Wait a moment for stop to take effect
+                QTimer.singleShot(50, lambda: self._restart_vlc_playback())
+                return
+            elif is_playing:
+                # Pause if playing
+                self.vlc_player.pause()
+                self.play_button.setText("Play")
+                self.vlc_position_timer.stop()
             else:
-                self.play()
+                # Play if paused or stopped
+                self.vlc_player.play()
+                self.play_button.setText("Pause")
+                self.vlc_position_timer.start()
         else:
             # QMediaPlayer mode
             if self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
@@ -333,47 +399,106 @@ class VideoPlayer(QWidget):
                 self.media_player.play()
                 self.play_button.setText("Pause")
     
-    def play(self):
-        """Start playback (custom display mode)"""
-        if not self.video_processor or not self.video_data:
+    def _restart_vlc_playback(self):
+        """Helper method to restart VLC playback from beginning"""
+        if not self.use_vlc or not self.vlc_player:
             return
-            
-        self.is_playing = True
-        self.play_button.setText("Pause")
         
-        # Start frame timer based on video FPS
-        fps = self.video_data.fps
-        if fps > 0:
-            interval = int(1000 / fps)  # Convert to milliseconds
-            self.frame_timer.start(interval)
+        # Stop position timer first
+        self.vlc_position_timer.stop()
+        
+        # Reset position to beginning
+        self.vlc_player.set_time(0)
+        self.position_slider.setValue(0)
+        if self.video_data:
+            self.current_frame = 1
+            self.frame_changed.emit(self.current_frame)
+        
+        # Wait a moment for position to reset, then start playing
+        QTimer.singleShot(100, lambda: self._start_vlc_playback())
     
-    def pause(self):
-        """Pause playback (custom display mode)"""
-        self.is_playing = False
-        self.play_button.setText("Play")
-        self.frame_timer.stop()
+    def _start_vlc_playback(self):
+        """Helper method to start VLC playback"""
+        if not self.use_vlc or not self.vlc_player:
+            return
+        # Start playing
+        self.vlc_player.play()
+        self.play_button.setText("Pause")
+        # Wait a moment before starting position timer to ensure playback started
+        QTimer.singleShot(100, lambda: self.vlc_position_timer.start())
     
     def stop(self):
         """Stop playback"""
-        if self.use_custom_display:
-            self.is_playing = False
+        if self.use_vlc:
+            self.vlc_player.stop()
             self.play_button.setText("Play")
-            self.frame_timer.stop()
-            self.current_frame = 1
-            self.update_custom_frame()
-            self.frame_changed.emit(self.current_frame)
+            self.vlc_position_timer.stop()
+            # Reset to beginning
+            self.vlc_player.set_time(0)
+            self.position_slider.setValue(0)
+            if self.video_data:
+                self.current_frame = 1
+                self.frame_changed.emit(self.current_frame)
         else:
             self.media_player.stop()
             self.play_button.setText("Play")
     
+    def update_vlc_position(self):
+        """Update position slider for VLC playback"""
+        if not self.use_vlc or not self.vlc_player:
+            return
+        
+        try:
+            state = self.vlc_player.get_state()
+            length = self.vlc_player.get_length()
+            time = self.vlc_player.get_time()
+            
+            # Check if video has ended
+            if state == vlc.State.Ended:
+                # Video ended - stop timer and update button
+                # Only update if not already at end to avoid repeated updates
+                if self.position_slider.value() < 1000:
+                    self.vlc_position_timer.stop()
+                    self.play_button.setText("Play")
+                    # Set position to end
+                    self.position_slider.setValue(1000)
+                    if self.video_data:
+                        self.current_frame = self.video_data.total_frames
+                        self.frame_changed.emit(self.current_frame)
+                return
+            
+            # Only update if we have valid values
+            if length > 0 and time >= 0:
+                # Calculate position as percentage (0-1000)
+                position = int((time / length) * 1000)
+                position = max(0, min(1000, position))  # Clamp to 0-1000
+                
+                # Only update slider if value changed significantly to reduce overhead
+                if abs(self.position_slider.value() - position) > 2:
+                    self.position_slider.setValue(position)
+                
+                # Update position label
+                current_time = time / 1000.0  # Convert to seconds
+                total_time = length / 1000.0
+                self.update_position_label(int(time), int(length))
+                
+                # Emit frame changed signal
+                if self.video_data and self.video_data.fps > 0:
+                    frame_number = int(current_time * self.video_data.fps) + 1
+                    frame_number = max(1, min(frame_number, self.video_data.total_frames))
+                    if frame_number != self.current_frame:
+                        self.current_frame = frame_number
+                        self.frame_changed.emit(self.current_frame)
+        except Exception as e:
+            print(f"Error updating VLC position: {e}")
+    
     def previous_frame(self):
         """Go to previous frame (skip back 1 second)"""
-        if self.use_custom_display:
-            # Custom display mode - go back by frames
-            if self.video_data and self.video_data.fps > 0:
-                frames_to_skip = int(self.video_data.fps)  # 1 second worth of frames
-                self.current_frame = max(1, self.current_frame - frames_to_skip)
-                self.update_custom_frame()
+        if self.use_vlc:
+            # VLC mode
+            current_time = self.vlc_player.get_time()
+            new_time = max(0, current_time - 1000)  # 1 second back
+            self.vlc_player.set_time(new_time)
         else:
             # QMediaPlayer mode
             current_pos = self.media_player.position()
@@ -382,12 +507,12 @@ class VideoPlayer(QWidget):
     
     def next_frame(self):
         """Go to next frame (skip forward 1 second)"""
-        if self.use_custom_display:
-            # Custom display mode - go forward by frames
-            if self.video_data and self.video_data.fps > 0:
-                frames_to_skip = int(self.video_data.fps)  # 1 second worth of frames
-                self.current_frame = min(self.video_data.total_frames, self.current_frame + frames_to_skip)
-                self.update_custom_frame()
+        if self.use_vlc:
+            # VLC mode
+            current_time = self.vlc_player.get_time()
+            duration = self.vlc_player.get_length()
+            new_time = min(duration, current_time + 1000)  # 1 second forward
+            self.vlc_player.set_time(new_time)
         else:
             # QMediaPlayer mode
             current_pos = self.media_player.position()
@@ -402,12 +527,12 @@ class VideoPlayer(QWidget):
         
         frame_number = max(1, min(frame_number, self.video_data.total_frames))
         
-        if self.use_custom_display:
-            self.current_frame = frame_number
-            self.update_custom_frame()
+        # Convert frame to time in milliseconds
+        time_ms = int((frame_number - 1) / self.video_data.fps * 1000)
+        
+        if self.use_vlc:
+            self.vlc_player.set_time(time_ms)
         else:
-            # Convert frame to time for QMediaPlayer
-            time_ms = int((frame_number - 1) / self.video_data.fps * 1000)
             self.media_player.setPosition(time_ms)
     
     def set_position(self, position: int):
@@ -415,12 +540,19 @@ class VideoPlayer(QWidget):
         if not self.video_data:
             return
             
-        if self.use_custom_display:
-            # Convert position to frame number
-            frame_number = int(position / 1000.0 * self.video_data.total_frames) + 1
-            frame_number = max(1, min(frame_number, self.video_data.total_frames))
-            self.current_frame = frame_number
-            self.update_custom_frame()
+        if self.use_vlc:
+            # Convert position (0-1000) to time in milliseconds
+            duration = self.vlc_player.get_length()
+            if duration > 0:
+                # Clamp position to valid range
+                position = max(0, min(1000, position))
+                time_ms = int(position / 1000.0 * duration)
+                # Temporarily stop position updates to avoid feedback loop
+                self.vlc_position_timer.stop()
+                self.vlc_player.set_time(time_ms)
+                # Restart timer after a short delay if playing
+                if self.vlc_player.is_playing():
+                    QTimer.singleShot(100, lambda: self.vlc_position_timer.start())
         else:
             self.media_player.setPosition(position)
     
@@ -488,14 +620,79 @@ class VideoPlayer(QWidget):
         """Handle media player errors"""
         print(f"Media player error: {error} - {error_string}")
         
-        # Try to recover from common errors
-        if error == QMediaPlayer.Error.FormatError:
-            print("Unsupported video format. Trying alternative approach...")
-            self.fallback_to_custom_player()
-        elif error == QMediaPlayer.Error.NetworkError:
-            print("Network error occurred")
-        elif error == QMediaPlayer.Error.ResourceError:
-            print("Resource error occurred")
+        # Try to recover from common errors by falling back to VLC
+        if error != QMediaPlayer.Error.NoError:
+            # Get the current video file path if available
+            source = self.media_player.source()
+            if source and source.isLocalFile():
+                file_path = source.toLocalFile()
+                print(f"QMediaPlayer error detected, falling back to VLC for: {file_path}")
+                self._fallback_to_vlc(file_path)
+    
+    def _check_qmediaplayer_status(self, file_path: str):
+        """Check if QMediaPlayer is actually working, fallback to VLC if not"""
+        if not self.video_data or not file_path:
+            return
+        
+        # Check if media player has valid media
+        status = self.media_player.mediaStatus()
+        error = self.media_player.error()
+        
+        # If there's an error or invalid media, fallback to VLC
+        if error != QMediaPlayer.Error.NoError or status == QMediaPlayer.MediaStatus.InvalidMedia:
+            print(f"QMediaPlayer has issues (error: {error}, status: {status}), falling back to VLC")
+            self._fallback_to_vlc(file_path)
+        # Also check if video widget is actually visible and has content
+        elif not self.video_widget.isVisible() or self.video_widget.size().isEmpty():
+            print("QMediaPlayer video widget not properly visible, falling back to VLC")
+            self._fallback_to_vlc(file_path)
+    
+    def _fallback_to_vlc(self, file_path: str):
+        """Fallback to VLC player"""
+        if not file_path or not self.video_data:
+            return
+        
+        print("Switching to VLC player...")
+        self.switch_to_vlc()
+        
+        try:
+            # Load video in VLC
+            media = self.vlc_instance.media_new(file_path)
+            if not media:
+                raise Exception("Failed to create VLC media object")
+            
+            # Add performance options
+            media.add_options(
+                ':avcodec-hw=any',
+                ':live-caching=300',
+                ':drop-late-frames',
+            )
+            self.vlc_player.set_media(media)
+            
+            # Parse media
+            try:
+                media.parse_async(0, None, None)
+            except:
+                media.parse()
+            
+            # Set window handle
+            if self.vlc_widget and hasattr(self.vlc_widget, 'winId'):
+                try:
+                    win_id = self.vlc_widget.winId()
+                    if win_id:
+                        self.vlc_player.set_hwnd(int(win_id))
+                except:
+                    pass
+            
+            # Set position slider
+            self.position_slider.setRange(0, 1000)
+            self.position_slider.setValue(0)
+            
+            print("Video loaded successfully into VLC (fallback)")
+        except Exception as e:
+            print(f"Error loading video in VLC fallback: {e}")
+            import traceback
+            traceback.print_exc()
     
     def fallback_to_custom_player(self):
         """Fallback to custom video player if media player fails"""
@@ -540,9 +737,9 @@ class VideoPlayer(QWidget):
     
     def update_controls(self):
         """Update control button states"""
-        if self.use_custom_display:
-            # Custom display mode - enable controls if we have video data
-            has_media = self.video_data is not None and self.video_processor is not None
+        if self.use_vlc:
+            # VLC mode - enable controls if we have video data
+            has_media = self.video_data is not None and self.vlc_player is not None
         else:
             # QMediaPlayer mode - check media status
             has_media = self.media_player.mediaStatus() == QMediaPlayer.MediaStatus.LoadedMedia
