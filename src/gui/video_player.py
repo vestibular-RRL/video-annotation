@@ -156,22 +156,25 @@ class VideoPlayer(QWidget):
         # Initialize VLC instance if not already done
         if self.vlc_instance is None:
             # Configure VLC for better performance
+            # Note: Removed --avcodec-hw=any to avoid Direct3D11 issues
+            # VLC will auto-detect hardware acceleration if available
             vlc_args = [
                 '--intf', 'dummy',  # No interface
                 '--no-audio-time-stretch',  # Disable audio time stretching
-                '--avcodec-hw=any',  # Enable hardware acceleration
                 '--live-caching=300',  # Set cache to 300ms for better performance
                 '--network-caching=300',  # Network cache
                 '--drop-late-frames',  # Drop late frames to prevent lag
                 '--skip-frames',  # Skip frames if needed
+                '--no-video-deco',  # Don't force specific decoder
             ]
             self.vlc_instance = vlc.Instance(vlc_args)
             self.vlc_player = self.vlc_instance.media_player_new()
             
             # Set additional performance options
             try:
-                # Enable hardware decoding if available
-                self.vlc_player.video_set_decode_device('d3d11', 0)  # Windows Direct3D11
+                # Try to enable hardware decoding, but don't fail if it doesn't work
+                # Direct3D11 can sometimes cause issues, so we'll let VLC choose
+                pass  # Let VLC auto-detect hardware acceleration
             except:
                 pass  # Fallback if not available
         
@@ -190,22 +193,8 @@ class VideoPlayer(QWidget):
         self.vlc_widget.raise_()
         
         # Set VLC output to widget (Windows) - must be done after widget is shown
-        try:
-            # For Windows, use winId() to get the window handle
-            # Need to ensure widget is visible first
-            if hasattr(self.vlc_widget, 'winId'):
-                win_id = self.vlc_widget.winId()
-                if win_id:
-                    self.vlc_player.set_hwnd(int(win_id))
-                    print(f"VLC window handle set: {win_id}")
-                else:
-                    print("Warning: VLC widget winId is None")
-            else:
-                print("Warning: VLC widget does not have winId method")
-        except Exception as e:
-            print(f"Warning: Could not set VLC window handle: {e}")
-            import traceback
-            traceback.print_exc()
+        # Use delayed call to ensure widget is fully ready and avoid Direct3D11 errors
+        QTimer.singleShot(100, lambda: self._set_vlc_window_handle())
         
         print("Switched to VLC display for AV1 codec")
     
@@ -247,16 +236,22 @@ class VideoPlayer(QWidget):
         try:
             print(f"Loading video: {file_path}")
             
-            # Stop any current playback first
+            # Stop any current playback first and clean up
             if self.use_vlc and self.vlc_player:
                 try:
                     self.vlc_player.stop()
                     self.vlc_position_timer.stop()
-                except:
-                    pass
+                    # Release current media to free resources
+                    self.vlc_player.set_media(None)
+                    # Small delay to allow cleanup
+                    import time
+                    time.sleep(0.1)
+                except Exception as e:
+                    print(f"Error cleaning up VLC player: {e}")
             elif self.media_player:
                 try:
                     self.media_player.stop()
+                    self.media_player.setSource(QUrl())  # Clear source
                 except:
                     pass
             
@@ -298,8 +293,8 @@ class VideoPlayer(QWidget):
                         raise Exception("Failed to create VLC media object")
                     
                     # Add performance options to media
+                    # Removed :avcodec-hw=any to avoid Direct3D11 issues
                     media.add_options(
-                        ':avcodec-hw=any',  # Hardware acceleration
                         ':live-caching=300',  # Cache for smooth playback
                         ':drop-late-frames',  # Drop late frames
                     )
@@ -312,14 +307,8 @@ class VideoPlayer(QWidget):
                         media.parse()  # Fallback to sync parse
                     
                     # Verify VLC widget is properly set up (already done in switch_to_vlc, but double-check)
-                    if self.vlc_widget and hasattr(self.vlc_widget, 'winId'):
-                        try:
-                            win_id = self.vlc_widget.winId()
-                            if win_id:
-                                self.vlc_player.set_hwnd(int(win_id))
-                                print(f"VLC widget window ID verified: {win_id}")
-                        except Exception as e:
-                            print(f"Warning: Could not verify VLC window handle: {e}")
+                    # Use delayed call to ensure widget is fully ready
+                    QTimer.singleShot(100, lambda: self._set_vlc_window_handle())
                     
                     print("Video loaded successfully into VLC")
                     
@@ -653,6 +642,16 @@ class VideoPlayer(QWidget):
             return
         
         print("Switching to VLC player...")
+        
+        # Clean up existing VLC player if switching from QMediaPlayer
+        if not self.use_vlc and self.vlc_player:
+            try:
+                self.vlc_player.stop()
+                self.vlc_player.set_media(None)
+                self.vlc_position_timer.stop()
+            except:
+                pass
+        
         self.switch_to_vlc()
         
         try:
@@ -662,11 +661,13 @@ class VideoPlayer(QWidget):
                 raise Exception("Failed to create VLC media object")
             
             # Add performance options
+            # Removed :avcodec-hw=any to avoid Direct3D11 issues
             media.add_options(
-                ':avcodec-hw=any',
                 ':live-caching=300',
                 ':drop-late-frames',
             )
+            
+            # Set media first
             self.vlc_player.set_media(media)
             
             # Parse media
@@ -675,14 +676,16 @@ class VideoPlayer(QWidget):
             except:
                 media.parse()
             
-            # Set window handle
+            # Set window handle - ensure widget is visible first
             if self.vlc_widget and hasattr(self.vlc_widget, 'winId'):
                 try:
-                    win_id = self.vlc_widget.winId()
-                    if win_id:
-                        self.vlc_player.set_hwnd(int(win_id))
-                except:
-                    pass
+                    # Ensure widget is visible and has a valid window ID
+                    self.vlc_widget.show()
+                    self.vlc_widget.raise_()
+                    # Small delay to ensure widget is ready
+                    QTimer.singleShot(100, lambda: self._set_vlc_window_handle())
+                except Exception as e:
+                    print(f"Warning setting VLC window handle: {e}")
             
             # Set position slider
             self.position_slider.setRange(0, 1000)
@@ -693,6 +696,18 @@ class VideoPlayer(QWidget):
             print(f"Error loading video in VLC fallback: {e}")
             import traceback
             traceback.print_exc()
+    
+    def _set_vlc_window_handle(self):
+        """Set VLC window handle - called with delay to ensure widget is ready"""
+        if not self.vlc_widget or not self.vlc_player:
+            return
+        try:
+            if hasattr(self.vlc_widget, 'winId'):
+                win_id = self.vlc_widget.winId()
+                if win_id:
+                    self.vlc_player.set_hwnd(int(win_id))
+        except Exception as e:
+            print(f"Error setting VLC window handle: {e}")
     
     def fallback_to_custom_player(self):
         """Fallback to custom video player if media player fails"""
