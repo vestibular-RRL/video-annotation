@@ -2,9 +2,13 @@
 CSV Exporter
 """
 
-import pandas as pd
+import csv
 import os
-from typing import List, Dict, Optional
+from itertools import chain
+from time import perf_counter
+from typing import List, Dict, Optional, Iterable, Callable, Any
+
+import pandas as pd
 from pathlib import Path
 from .video_trimmer import VideoTrimmer
 
@@ -15,23 +19,156 @@ class CSVExporter:
     def __init__(self):
         self.video_trimmer = VideoTrimmer()
     
-    def export_annotations_to_csv(self, data: List[Dict], file_path: str) -> bool:
-        """Export annotations to CSV file"""
+    def export_annotations_to_csv(
+        self,
+        data: Iterable[Dict[str, Any]],
+        file_path: str,
+        method: str = "fast",
+        chunk_size: int = 5000,
+        process_callback: Optional[Callable[[], None]] = None,
+    ) -> bool:
+        """Export annotations to CSV file.
+
+        Args:
+            data: Iterable of rows containing at least Frame# and Annotation keys
+            file_path: Destination CSV path
+            method: "fast" (streaming csv module) or "pandas"
+            chunk_size: Callback interval in rows for the fast method
+            process_callback: Optional callback to keep UI responsive during long exports
+        """
+        if method == "pandas":
+            return self._export_annotations_to_csv_pandas(data, file_path)
+        return self._export_annotations_to_csv_fast(data, file_path, chunk_size, process_callback)
+
+    def export_annotations_to_csv_with_metrics(
+        self,
+        data: Iterable[Dict[str, Any]],
+        file_path: str,
+        method: str = "fast",
+        chunk_size: int = 5000,
+        process_callback: Optional[Callable[[], None]] = None,
+    ) -> Dict[str, Any]:
+        """Export annotations and return timing/blocking metrics."""
+        start = perf_counter()
         try:
-            # Create DataFrame from data
-            df = pd.DataFrame(data)
-            
-            # Ensure required columns exist
+            if method == "pandas":
+                success = self._export_annotations_to_csv_pandas(data, file_path)
+                elapsed = perf_counter() - start
+                return {
+                    "success": success,
+                    "method": "pandas",
+                    "rows_written": None,
+                    "duration_seconds": elapsed,
+                    "max_block_seconds": elapsed,
+                    "chunk_count": 1,
+                }
+
+            success, rows_written, max_block_seconds, chunk_count = self._export_annotations_to_csv_fast(
+                data,
+                file_path,
+                chunk_size,
+                process_callback,
+                collect_metrics=True,
+            )
+            elapsed = perf_counter() - start
+            return {
+                "success": success,
+                "method": "fast",
+                "rows_written": rows_written,
+                "duration_seconds": elapsed,
+                "max_block_seconds": max_block_seconds,
+                "chunk_count": chunk_count,
+            }
+        except Exception as e:
+            elapsed = perf_counter() - start
+            print(f"Error exporting to CSV with metrics: {e}")
+            return {
+                "success": False,
+                "method": method,
+                "rows_written": 0,
+                "duration_seconds": elapsed,
+                "max_block_seconds": elapsed,
+                "chunk_count": 0,
+                "error": str(e),
+            }
+
+    def _export_annotations_to_csv_pandas(self, data: Iterable[Dict[str, Any]], file_path: str) -> bool:
+        """Legacy pandas export path used as fallback and benchmark baseline."""
+        try:
+            rows = data if isinstance(data, list) else list(data)
+            df = pd.DataFrame(rows)
+
             if "Frame#" not in df.columns or "Annotation" not in df.columns:
                 return False
-            
-            # Export to CSV
+
             df.to_csv(file_path, index=False, encoding='utf-8')
             return True
-            
         except Exception as e:
-            print(f"Error exporting to CSV: {e}")
+            print(f"Error exporting to CSV with pandas: {e}")
             return False
+
+    def _export_annotations_to_csv_fast(
+        self,
+        data: Iterable[Dict[str, Any]],
+        file_path: str,
+        chunk_size: int,
+        process_callback: Optional[Callable[[], None]],
+        collect_metrics: bool = False,
+    ):
+        """Fast streaming CSV export path using Python's csv module."""
+        try:
+            iterator = iter(data)
+            first_row = next(iterator, None)
+            if first_row is None:
+                return (False, 0, 0.0, 0) if collect_metrics else False
+
+            if not isinstance(first_row, dict):
+                return (False, 0, 0.0, 0) if collect_metrics else False
+
+            fieldnames = list(first_row.keys())
+            if "Frame#" not in fieldnames or "Annotation" not in fieldnames:
+                return (False, 0, 0.0, 0) if collect_metrics else False
+
+            rows_written = 0
+            chunk_count = 0
+            max_block_seconds = 0.0
+            block_start = perf_counter()
+
+            with open(file_path, 'w', newline='', encoding='utf-8') as csvfile:
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames, extrasaction='ignore')
+                writer.writeheader()
+
+                for row in chain([first_row], iterator):
+                    if not isinstance(row, dict):
+                        continue
+
+                    writer.writerow({column: row.get(column, "") for column in fieldnames})
+                    rows_written += 1
+
+                    if process_callback and rows_written % max(1, chunk_size) == 0:
+                        chunk_count += 1
+                        now = perf_counter()
+                        max_block_seconds = max(max_block_seconds, now - block_start)
+                        process_callback()
+                        block_start = perf_counter()
+
+                if process_callback:
+                    now = perf_counter()
+                    max_block_seconds = max(max_block_seconds, now - block_start)
+                    process_callback()
+
+            if collect_metrics:
+                if not process_callback:
+                    max_block_seconds = 0.0
+                    chunk_count = 1
+                elif rows_written % max(1, chunk_size) != 0:
+                    chunk_count += 1
+                return True, rows_written, max_block_seconds, chunk_count
+
+            return True
+        except Exception as e:
+            print(f"Error exporting to CSV with fast method: {e}")
+            return (False, 0, 0.0, 0) if collect_metrics else False
     
     def export_annotations_to_dataframe(self, data: List[Dict]) -> Optional[pd.DataFrame]:
         """Export annotations to pandas DataFrame"""

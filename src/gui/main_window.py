@@ -7,7 +7,7 @@ import os
 from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                              QSplitter, QMenuBar, QMenu, QFileDialog, QMessageBox,
                              QTableWidget, QTableWidgetItem, QHeaderView, QSlider,
-                             QLabel, QLineEdit, QPushButton, QComboBox)
+                             QLabel, QLineEdit, QPushButton, QComboBox, QApplication)
 from PyQt6.QtCore import Qt, pyqtSignal, QUrl
 from PyQt6.QtGui import QAction, QKeySequence, QDesktopServices
 
@@ -696,20 +696,6 @@ class MainWindow(QMainWindow):
                 start_frame = self.seconds_to_frame(start_seconds)
                 end_frame = self.seconds_to_frame(end_seconds)
                 
-                # Prepare data for export (only within the selected range)
-                data = []
-                for frame_num in range(start_frame, end_frame + 1):
-                    # Get annotation from table
-                    table_row = frame_num - 1
-                    if table_row < self.annotation_table.rowCount():
-                        annotation_item = self.annotation_table.item(table_row, 1)
-                        annotation_value = annotation_item.text() if annotation_item else "0"
-                        
-                        data.append({
-                            "Frame#": frame_num,
-                            "Annotation": annotation_value
-                        })
-                
                 # Ask user if they want to create trimmed video
                 reply = QMessageBox.question(
                     self, 
@@ -724,11 +710,20 @@ class MainWindow(QMainWindow):
                 )
                 
                 if reply == QMessageBox.StandardButton.Yes:
+                    # Prepare data for export (only needed for trimmed video path)
+                    data = self._collect_annotations_in_range(start_frame, end_frame)
+
                     # Use the efficient workflow for trimmed video export
                     self._export_with_trimmed_video_efficient(data, start_frame, end_frame, start_seconds, end_seconds)
                 else:
-                    # Export only CSV
-                    success = self.csv_exporter.export_annotations_to_csv(data, file_path)
+                    # Export only CSV using streaming writer to reduce UI blocking
+                    success = self.csv_exporter.export_annotations_to_csv(
+                        self._iter_annotations_in_range(start_frame, end_frame),
+                        file_path,
+                        method="fast",
+                        chunk_size=5000,
+                        process_callback=QApplication.processEvents,
+                    )
                     
                     if success:
                         # Show success message with range info
@@ -757,24 +752,32 @@ class MainWindow(QMainWindow):
             end_frame = self.seconds_to_frame(end_seconds)
             
             # Prepare data for export (only within the selected range)
-            data = []
-            for frame_num in range(start_frame, end_frame + 1):
-                # Get annotation from table
-                table_row = frame_num - 1
-                if table_row < self.annotation_table.rowCount():
-                    annotation_item = self.annotation_table.item(table_row, 1)
-                    annotation_value = annotation_item.text() if annotation_item else "0"
-                    
-                    data.append({
-                        "Frame#": frame_num,
-                        "Annotation": annotation_value
-                    })
+            data = self._collect_annotations_in_range(start_frame, end_frame)
             
             # Use the efficient workflow
             self._export_with_trimmed_video_efficient(data, start_frame, end_frame, start_seconds, end_seconds)
             
         except Exception as e:
             QMessageBox.critical(self, "Export Error", f"Failed to export: {str(e)}")
+
+    def _iter_annotations_in_range(self, start_frame: int, end_frame: int):
+        """Yield annotation rows for a frame range without building a large intermediate list."""
+        row_count = self.annotation_table.rowCount()
+        for frame_num in range(start_frame, end_frame + 1):
+            table_row = frame_num - 1
+            if table_row >= row_count:
+                continue
+
+            annotation_item = self.annotation_table.item(table_row, 1)
+            annotation_value = annotation_item.text() if annotation_item else "0"
+            yield {
+                "Frame#": frame_num,
+                "Annotation": annotation_value
+            }
+
+    def _collect_annotations_in_range(self, start_frame: int, end_frame: int):
+        """Collect range annotations into a list (used when data needs to be reused)."""
+        return list(self._iter_annotations_in_range(start_frame, end_frame))
     
     def _export_with_trimmed_video_efficient(self, data, start_frame, end_frame, start_seconds, end_seconds):
         """Helper method for efficient trimmed video export workflow"""
