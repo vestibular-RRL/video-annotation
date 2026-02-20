@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QSplitter, QMenuBar, QMenu, QFileDialog, QMessageBox,
                              QTableWidget, QTableWidgetItem, QHeaderView, QSlider,
                              QLabel, QLineEdit, QPushButton, QComboBox, QApplication)
-from PyQt6.QtCore import Qt, pyqtSignal, QUrl
+from PyQt6.QtCore import Qt, pyqtSignal, QUrl, QObject, QThread
 from PyQt6.QtGui import QAction, QKeySequence, QDesktopServices
 
 from src.gui.video_player import VideoPlayer
@@ -19,6 +19,77 @@ from src.core.csv_exporter import CSVExporter
 from src.models.video_data import VideoData
 from config.constants import SUPPORTED_VIDEO_FORMATS, WINDOW_TITLE, REPORT_PROBLEM_URL
 from config.settings import Settings
+
+
+class ExportWorker(QObject):
+    """Background worker for CSV export operations."""
+
+    finished = pyqtSignal(bool, str, dict)
+
+    def __init__(self, mode: str, payload: dict):
+        super().__init__()
+        self.mode = mode
+        self.payload = payload
+
+    def run(self):
+        try:
+            exporter = CSVExporter()
+
+            if self.mode == "csv_only":
+                annotations = self.payload["annotations"]
+                start_frame = self.payload["start_frame"]
+                end_frame = self.payload["end_frame"]
+                file_path = self.payload["file_path"]
+
+                def _row_iter():
+                    for frame_num in range(start_frame, end_frame + 1):
+                        yield {
+                            "Frame#": frame_num,
+                            "Annotation": annotations.get(frame_num, "0")
+                        }
+
+                success = exporter.export_annotations_to_csv(
+                    _row_iter(),
+                    file_path,
+                    method="fast",
+                    chunk_size=1000,
+                    process_callback=None,
+                )
+                self.finished.emit(success, self.mode, self.payload)
+                return
+
+            if self.mode == "csv_with_trimmed":
+                annotations = self.payload["annotations"]
+                start_frame = self.payload["start_frame"]
+                end_frame = self.payload["end_frame"]
+
+                data = [
+                    {
+                        "Frame#": frame_num,
+                        "Annotation": annotations.get(frame_num, "0")
+                    }
+                    for frame_num in range(start_frame, end_frame + 1)
+                ]
+
+                success = exporter.export_with_trimmed_video(
+                    data=data,
+                    output_path=self.payload["temp_csv_path"],
+                    video_path=self.payload["video_path"],
+                    start_frame=start_frame,
+                    end_frame=end_frame,
+                    fps=self.payload["fps"],
+                    custom_name=self.payload["folder_name"],
+                )
+                self.finished.emit(success, self.mode, self.payload)
+                return
+
+            self.finished.emit(False, self.mode, self.payload)
+        except Exception as e:
+            payload = dict(self.payload)
+            payload["error"] = str(e)
+            self.finished.emit(False, self.mode, payload)
+
+
 class MainWindow(QMainWindow):
     """Main application window"""
     
@@ -29,6 +100,8 @@ class MainWindow(QMainWindow):
         self.video_data = None
         self.annotation_manager = AnnotationManager()
         self.csv_exporter = CSVExporter()
+        self.export_thread = None
+        self.export_worker = None
         
         self.init_ui()
         self.setup_menus()
@@ -658,15 +731,8 @@ class MainWindow(QMainWindow):
         
         if file_path:
             try:
-                # Get annotations from table
-                annotations = {}
-                for row in range(self.annotation_table.rowCount()):
-                    frame_number = row + 1
-                    annotation_item = self.annotation_table.item(row, 1)
-                    if annotation_item and annotation_item.text() != "0":
-                        annotations[frame_number] = annotation_item.text()
-                
-                # Save to file
+                # Save from annotation manager (sparse dict, faster than scanning table)
+                annotations = self.annotation_manager.get_all_annotations()
                 self.annotation_manager.save_annotations(file_path, annotations)
                 QMessageBox.information(self, "Success", "Annotations saved successfully.")
                 
@@ -710,28 +776,18 @@ class MainWindow(QMainWindow):
                 )
                 
                 if reply == QMessageBox.StandardButton.Yes:
-                    # Prepare data for export (only needed for trimmed video path)
-                    data = self._collect_annotations_in_range(start_frame, end_frame)
-
                     # Use the efficient workflow for trimmed video export
-                    self._export_with_trimmed_video_efficient(data, start_frame, end_frame, start_seconds, end_seconds)
+                    self._export_with_trimmed_video_efficient(start_frame, end_frame, start_seconds, end_seconds)
                 else:
-                    # Export only CSV using streaming writer to reduce UI blocking
-                    success = self.csv_exporter.export_annotations_to_csv(
-                        self._iter_annotations_in_range(start_frame, end_frame),
-                        file_path,
-                        method="fast",
-                        chunk_size=5000,
-                        process_callback=QApplication.processEvents,
-                    )
-                    
-                    if success:
-                        # Show success message with range info
-                        start_time_str = self.format_time(start_seconds)
-                        end_time_str = self.format_time(end_seconds)
-                        QMessageBox.information(self, "Success", f"CSV exported successfully for time range {start_time_str} - {end_time_str}")
-                    else:
-                        QMessageBox.critical(self, "Error", "Failed to export CSV.")
+                    payload = {
+                        "annotations": self.annotation_manager.get_all_annotations(),
+                        "start_frame": start_frame,
+                        "end_frame": end_frame,
+                        "file_path": file_path,
+                        "start_seconds": start_seconds,
+                        "end_seconds": end_seconds,
+                    }
+                    self._start_export_worker("csv_only", payload)
                 
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to export: {str(e)}")
@@ -751,35 +807,23 @@ class MainWindow(QMainWindow):
             start_frame = self.seconds_to_frame(start_seconds)
             end_frame = self.seconds_to_frame(end_seconds)
             
-            # Prepare data for export (only within the selected range)
-            data = self._collect_annotations_in_range(start_frame, end_frame)
-            
             # Use the efficient workflow
-            self._export_with_trimmed_video_efficient(data, start_frame, end_frame, start_seconds, end_seconds)
+            self._export_with_trimmed_video_efficient(start_frame, end_frame, start_seconds, end_seconds)
             
         except Exception as e:
             QMessageBox.critical(self, "Export Error", f"Failed to export: {str(e)}")
 
     def _iter_annotations_in_range(self, start_frame: int, end_frame: int):
-        """Yield annotation rows for a frame range without building a large intermediate list."""
-        row_count = self.annotation_table.rowCount()
+        """Yield annotation rows for a frame range from annotation manager state."""
+        annotations = self.annotation_manager.get_all_annotations()
         for frame_num in range(start_frame, end_frame + 1):
-            table_row = frame_num - 1
-            if table_row >= row_count:
-                continue
-
-            annotation_item = self.annotation_table.item(table_row, 1)
-            annotation_value = annotation_item.text() if annotation_item else "0"
+            annotation_value = annotations.get(frame_num, "0")
             yield {
                 "Frame#": frame_num,
                 "Annotation": annotation_value
             }
 
-    def _collect_annotations_in_range(self, start_frame: int, end_frame: int):
-        """Collect range annotations into a list (used when data needs to be reused)."""
-        return list(self._iter_annotations_in_range(start_frame, end_frame))
-    
-    def _export_with_trimmed_video_efficient(self, data, start_frame, end_frame, start_seconds, end_seconds):
+    def _export_with_trimmed_video_efficient(self, start_frame, end_frame, start_seconds, end_seconds):
         """Helper method for efficient trimmed video export workflow"""
         # Step 1: Ask for folder name
         from PyQt6.QtWidgets import QInputDialog, QFileDialog
@@ -835,41 +879,88 @@ class MainWindow(QMainWindow):
         try:
             # Create a temporary CSV path for the export function
             temp_csv_path = os.path.join(base_dir, f"{folder_name}.csv")
-            
-            # Export with trimmed video using the folder name
-            success = self.csv_exporter.export_with_trimmed_video(
-                data=data,
-                output_path=temp_csv_path,
-                video_path=self.video_data.file_path,
-                start_frame=start_frame,
-                end_frame=end_frame,
-                fps=self.video_data.fps,
-                custom_name=folder_name
-            )
-            
-            if success:
-                # Show success message with full details
-                start_time_str = self.format_time(start_seconds)
-                end_time_str = self.format_time(end_seconds)
-                
-                message = f"✅ Export completed successfully!\n\n" \
-                         f"📁 Location: {full_folder_path}\n\n" \
-                         f"📊 Export Details:\n" \
-                         f"• Time range: {start_time_str} - {end_time_str}\n" \
-                         f"• Frame range: {start_frame} - {end_frame}\n" \
-                         f"• Total frames: {end_frame - start_frame + 1}\n\n" \
-                         f"📁 Files created:\n" \
-                         f"• {folder_name}.mp4 (trimmed video)\n" \
-                         f"• {folder_name}.csv (annotations)\n" \
-                         f"• {folder_name}_summary.json (export details)\n\n" \
-                         f"All files use the same name: '{folder_name}'"
-                
-                QMessageBox.information(self, "Export Success", message)
-            else:
-                QMessageBox.critical(self, "Export Error", "Failed to export with trimmed video.")
+            payload = {
+                "annotations": self.annotation_manager.get_all_annotations(),
+                "start_frame": start_frame,
+                "end_frame": end_frame,
+                "start_seconds": start_seconds,
+                "end_seconds": end_seconds,
+                "temp_csv_path": temp_csv_path,
+                "video_path": self.video_data.file_path,
+                "fps": self.video_data.fps,
+                "folder_name": folder_name,
+                "full_folder_path": full_folder_path,
+            }
+            self._start_export_worker("csv_with_trimmed", payload)
             
         except Exception as e:
             QMessageBox.critical(self, "Export Error", f"Failed to export: {str(e)}")
+
+    def _start_export_worker(self, mode: str, payload: dict):
+        """Run export in a background thread to keep the UI responsive."""
+        if self.export_thread is not None and self.export_thread.isRunning():
+            QMessageBox.warning(self, "Export In Progress", "An export is already running. Please wait.")
+            return
+
+        self.status_bar.showMessage("Export in progress...", 0)
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+
+        self.export_thread = QThread(self)
+        self.export_worker = ExportWorker(mode=mode, payload=payload)
+        self.export_worker.moveToThread(self.export_thread)
+
+        self.export_thread.started.connect(self.export_worker.run)
+        self.export_worker.finished.connect(self._on_export_finished)
+        self.export_worker.finished.connect(self.export_thread.quit)
+        self.export_worker.finished.connect(self.export_worker.deleteLater)
+        self.export_thread.finished.connect(self.export_thread.deleteLater)
+
+        self.export_thread.start()
+
+    def _on_export_finished(self, success: bool, mode: str, payload: dict):
+        """Handle export completion from background worker."""
+        QApplication.restoreOverrideCursor()
+        self.status_bar.clearMessage()
+
+        self.export_worker = None
+        self.export_thread = None
+
+        if not success:
+            error_message = payload.get("error", "Failed to export.")
+            QMessageBox.critical(self, "Export Error", error_message)
+            return
+
+        if mode == "csv_only":
+            start_time_str = self.format_time(payload["start_seconds"])
+            end_time_str = self.format_time(payload["end_seconds"])
+            QMessageBox.information(
+                self,
+                "Success",
+                f"CSV exported successfully for time range {start_time_str} - {end_time_str}"
+            )
+            return
+
+        if mode == "csv_with_trimmed":
+            start_time_str = self.format_time(payload["start_seconds"])
+            end_time_str = self.format_time(payload["end_seconds"])
+            folder_name = payload["folder_name"]
+            full_folder_path = payload["full_folder_path"]
+            start_frame = payload["start_frame"]
+            end_frame = payload["end_frame"]
+
+            message = f"✅ Export completed successfully!\n\n" \
+                     f"📁 Location: {full_folder_path}\n\n" \
+                     f"📊 Export Details:\n" \
+                     f"• Time range: {start_time_str} - {end_time_str}\n" \
+                     f"• Frame range: {start_frame} - {end_frame}\n" \
+                     f"• Total frames: {end_frame - start_frame + 1}\n\n" \
+                     f"📁 Files created:\n" \
+                     f"• {folder_name}.mp4 (trimmed video)\n" \
+                     f"• {folder_name}.csv (annotations)\n" \
+                     f"• {folder_name}_summary.json (export details)\n\n" \
+                     f"All files use the same name: '{folder_name}'"
+
+            QMessageBox.information(self, "Export Success", message)
     
     def show_about(self):
         """Show about dialog"""

@@ -63,6 +63,7 @@ echo.
 REM Try to build with minimal exclusions
 echo Building with PyInstaller...
 pyinstaller --onefile --windowed --name "VideoAnnotationTool" ^
+    --hidden-import vlc ^
   --exclude-module matplotlib ^
   --exclude-module scipy ^
   --exclude-module PIL ^

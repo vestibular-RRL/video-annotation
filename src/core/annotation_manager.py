@@ -17,8 +17,13 @@ class AnnotationManager:
         """Add or update an annotation for a frame"""
         if frame_number < 1:
             return False
-        
-        self.annotations[frame_number] = annotation_text
+
+        normalized_annotation = "" if annotation_text is None else str(annotation_text).strip()
+        if normalized_annotation in {"", "0"}:
+            self.annotations.pop(frame_number, None)
+            return True
+
+        self.annotations[frame_number] = normalized_annotation
         return True
     
     def update_annotation(self, frame_number: int, annotation_text: str) -> bool:

@@ -10,9 +10,15 @@ from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PyQt6.QtMultimediaWidgets import QVideoWidget
 from PyQt6.QtGui import QAction
 import cv2
-import vlc
 import os
 from typing import Optional
+
+try:
+    import vlc
+    HAS_VLC = True
+except Exception:
+    vlc = None
+    HAS_VLC = False
 
 from src.core.video_processor import VideoProcessor
 from src.models.video_data import VideoData
@@ -150,6 +156,11 @@ class VideoPlayer(QWidget):
     
     def switch_to_vlc(self):
         """Switch to VLC-based display for AV1 videos"""
+        if not HAS_VLC:
+            print("VLC Python bindings not available; using QMediaPlayer instead")
+            self.switch_to_media_player()
+            return
+
         self.use_vlc = True
         self.video_widget.hide()
         
@@ -278,8 +289,17 @@ class VideoPlayer(QWidget):
             
             # Choose display method based on codec
             if codec in ['AV01', 'av01']:  # AV1 codec
-                print("AV1 codec detected - using VLC")
-                self.switch_to_vlc()
+                if HAS_VLC:
+                    print("AV1 codec detected - using VLC")
+                    self.switch_to_vlc()
+                else:
+                    print("AV1 codec detected but VLC module is unavailable - using QMediaPlayer")
+                    self.switch_to_media_player()
+                    self.media_player.setSource(QUrl.fromLocalFile(file_path))
+                    QTimer.singleShot(500, lambda: self._check_qmediaplayer_status(file_path))
+                    self.update_controls()
+                    self.media_player.positionChanged.connect(self.update_frame_from_position)
+                    return
                 
                 # Ensure VLC widget is visible
                 if self.vlc_widget:
@@ -639,6 +659,10 @@ class VideoPlayer(QWidget):
     def _fallback_to_vlc(self, file_path: str):
         """Fallback to VLC player"""
         if not file_path or not self.video_data:
+            return
+
+        if not HAS_VLC:
+            print("VLC fallback requested but VLC module is unavailable")
             return
         
         print("Switching to VLC player...")
